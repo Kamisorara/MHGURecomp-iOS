@@ -24,3 +24,6 @@ __pycache__/
 /run2/
 /run3/
 /third_party/ffmpeg/
+
+# Local game dump (XCI, keys, extracted exefs/romfs) - never commit:
+game-resources/
