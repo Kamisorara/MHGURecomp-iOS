@@ -580,12 +580,17 @@ void backend_present(NvnTexture *t) {
     vk_end_pass();
     vk_ms_resolve(b);
     if (frame_begin()) {
-        // the game's image, as large as fits with its aspect ratio, centred (or stretched to fill screen)
+        // the game's image, centred: Fit (as large as fits with its aspect ratio), Fill (zoomed until the screen is
+        // full; the viewport outgrows it and the full-screen scissor crops the excess) or Stretch (distorted to it)
         double ww = g_vk.sc_extent.width, wh = g_vk.sc_extent.height;
         double vw, vh;
-        if (g_config.stretch) {
+        if (g_config.scale_mode == SCALE_STRETCH) {
             vw = ww;
             vh = wh;
+        } else if (g_config.scale_mode == SCALE_FILL) {
+            double s = fmax(ww / t->width, wh / t->height);
+            vw = t->width * s;
+            vh = t->height * s;
         } else {
             double s = fmin(ww / t->width, wh / t->height);
             vw = t->width * s;

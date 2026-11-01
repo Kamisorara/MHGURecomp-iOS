@@ -5,6 +5,7 @@
 enum { DISPLAY_WINDOWED, DISPLAY_FULLSCREEN, DISPLAY_BORDERLESS };
 enum { FACE_POSITION, FACE_LABEL };
 enum { COMBO_LENIENT, COMBO_STRICT };
+enum { SCALE_FIT, SCALE_FILL, SCALE_STRETCH, SCALE_AUTO };  // how the picture meets a screen of another shape
 
 // [Monster HP]: factors on the HP multiplier of Hub-type quests' large monsters
 #define HP_QUESTS_MAX 256
@@ -38,6 +39,7 @@ typedef struct {
     int ui_anchor;            // where the HUD goes on a picture wider than 16:9: UI_*
     int background_input;     // the controller keeps working while the window is in the background (runtime/ui.c)
     int stretch;              // 1: stretch to fill entire screen (no letterboxing), 0: maintain aspect ratio
+    int scale_mode;           // SCALE_*: Fit (bars), Fill (zoom, cropped by the scissor) or Stretch; Auto picks per screen
     int mute_in_background;   // [Audio] MuteInBackground: no sound while the window is not focused
     int combo_window;         // [Controls] ComboInputWindow: COMBO_LENIENT / COMBO_STRICT
 } Config;

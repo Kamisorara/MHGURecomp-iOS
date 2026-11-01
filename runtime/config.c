@@ -16,7 +16,7 @@
 #include "config.h"
 #include "rt.h"
 
-Config g_config = {DISPLAY_BORDERLESS, 1920, 1080, 0, 0, 60, 1, 1, 1, FACE_POSITION, 39500, "", 1, 1, 1, {{1, 1, 1, 1}, 2}, 1.0f, 0.0f, 1.0f, UI_CENTER, 1, 0, 0, COMBO_LENIENT};
+Config g_config = {DISPLAY_BORDERLESS, 1920, 1080, 0, 0, 60, 1, 1, 1, FACE_POSITION, 39500, "", 1, 1, 1, {{1, 1, 1, 1}, 2}, 1.0f, 0.0f, 1.0f, UI_CENTER, 1, 0, SCALE_AUTO, 0, COMBO_LENIENT};
 static volatile int g_window_focused = 1;
 
 int config_live_combo_window(void) {
@@ -67,6 +67,12 @@ static const char DEFAULT_INI[] =
     "\n"
     "; Stretch: On or Off. Stretches the image to fill the whole screen (useful on 4:3 iPad displays without black bars).\n"
     "Stretch = Off\n"
+    "\n"
+    "; ScaleMode: Fit, Fill or Stretch (Stretch = On above is the same as Stretch here). Fit keeps the whole picture\n"
+    "; centred with bars around it; Fill zooms it until the screen is full (no bars, a little of the picture falls\n"
+    "; outside at the sides, about 5% on an iPad); Stretch distorts it to the screen's shape. Auto: Fill on screens\n"
+    "; narrower than 16:10 (iPads), Fit elsewhere.\n"
+    "ScaleMode = Auto\n"
     "\n"
     "[Anti-aliasing]\n"
     "; MSAA: Off, 2x, 4x or 8x. Smooths the edges of 3D geometry and of some cut-out leaves and fences; each step\n"
@@ -276,6 +282,12 @@ static void set_key(const char *key, char *val, int line) {
         if (!strcmp(v, "on") || !strcmp(v, "1") || !strcmp(v, "true") || !strcmp(v, "yes")) g_config.stretch = 1;
         else if (!strcmp(v, "off") || !strcmp(v, "0") || !strcmp(v, "false") || !strcmp(v, "no")) g_config.stretch = 0;
         else ok = false;
+    } else if (!strcmp(k, "scalemode")) {
+        if (!strcmp(v, "fit") || !strcmp(v, "aspect")) g_config.scale_mode = SCALE_FIT;
+        else if (!strcmp(v, "fill") || !strcmp(v, "crop") || !strcmp(v, "zoom")) g_config.scale_mode = SCALE_FILL;
+        else if (!strcmp(v, "stretch")) g_config.scale_mode = SCALE_STRETCH;
+        else if (!strcmp(v, "auto")) g_config.scale_mode = SCALE_AUTO;
+        else ok = false;
     } else if (!strcmp(k, "fxaa")) {
         if (!strcmp(v, "on") || !strcmp(v, "1") || !strcmp(v, "true") || !strcmp(v, "yes")) g_config.fxaa = 1;
         else if (!strcmp(v, "off") || !strcmp(v, "0") || !strcmp(v, "false") || !strcmp(v, "no")) g_config.fxaa = 0;
@@ -413,6 +425,8 @@ void config_load(void) {
 
     const SDL_DisplayMode *dm = SDL_GetDesktopDisplayMode(SDL_GetPrimaryDisplay());
     desktop_w = dm ? dm->w : 1920, desktop_h = dm ? dm->h : 1080;
+    float screen_w = dm ? (float)(dm->w > dm->h ? dm->w : dm->h) : 1920.0f;  // the screen's landscape shape,
+    float screen_h = dm ? (float)(dm->w > dm->h ? dm->h : dm->w) : 1080.0f;  // before the 1080p floor below
 #if defined(__APPLE__)
     // On iOS/iPadOS, SDL display modes are returned in UIKit points (e.g. 480x300 or 960x640).
     // Ensure native 1080p dimensions for sharp Retina display rendering!
@@ -431,6 +445,12 @@ void config_load(void) {
     if ((e = getenv("MHGU_FXAA"))) g_config.fxaa = atoi(e) != 0;
     if ((e = getenv("MHGU_BACKGROUND_INPUT"))) g_config.background_input = atoi(e) != 0;
     if ((e = getenv("MHGU_STRETCH"))) g_config.stretch = atoi(e) != 0;
+    if ((e = getenv("MHGU_SCALEMODE"))) {
+        if (!strcasecmp(e, "fit")) g_config.scale_mode = SCALE_FIT;
+        else if (!strcasecmp(e, "fill")) g_config.scale_mode = SCALE_FILL;
+        else if (!strcasecmp(e, "stretch")) g_config.scale_mode = SCALE_STRETCH;
+        else if (!strcasecmp(e, "auto")) g_config.scale_mode = SCALE_AUTO;
+    }
     if ((e = getenv("MHGU_PAD_POSITIONAL"))) g_config.face_buttons = atoi(e) ? FACE_POSITION : FACE_LABEL;
     if ((e = getenv("MHGU_LDN_PORT")) && atoi(e) > 0) g_config.ldn_port = atoi(e);
     if ((e = getenv("MHGU_SYNC_ZAKO"))) g_config.sync_small_monsters = atoi(e) != 0;
@@ -448,6 +468,16 @@ void config_load(void) {
 #else
     if (g_config.display_mode == DISPLAY_BORDERLESS) tw = tw < desktop_w ? tw : desktop_w, th = th < desktop_h ? th : desktop_h;
 #endif
+    // The picture's scale mode: Fit / Fill / Stretch, Auto decided by the screen's shape. Fill zooms until the
+    // screen is full (backend_present: the oversized viewport is cropped by the full-screen scissor, no bars on
+    // iPads); Fit keeps the whole picture with bars. Stretch = On (the older setting) wins when ScaleMode is Auto.
+    if (g_config.stretch && g_config.scale_mode == SCALE_AUTO) g_config.scale_mode = SCALE_STRETCH;
+    if (g_config.scale_mode == SCALE_AUTO) {
+        float wa = screen_w / screen_h;  // (tw/th is floored to 16:9 on Apple: not the screen's real shape)
+        g_config.scale_mode = wa < 1.55f ? SCALE_FILL : SCALE_FIT;
+        LOG("[config] ScaleMode Auto: the screen is %.3f wide, using %s\n", wa,
+            g_config.scale_mode == SCALE_FILL ? "Fill" : "Fit");
+    }
     // The picture's shape: the window's or AspectRatio's, at least 16:10. The game lays its HUD out for 16:9, which
     // still fits down to 16:10 (a little flatter, nvn/vulkan/exec.c), so a narrower window (4:3) shows 16:10 with bars.
     // Wider than 16:9 shows more to the sides, 16:9 to 16:10 more above and below (camera_fovy, gen.py PATCHES).
