@@ -54,8 +54,9 @@ static const char DEFAULT_INI[] =
     "; exactly double, e.g. 3840x2160 for 1920x1080).\n"
     "RenderResolution = Auto\n"
     "\n"
-    "; The picture's shape: Auto (the window's) or a ratio such as 21:9. Wider than 16:9 (ultrawide screens) shows\n"
-    "; more to the sides, 16:10 a little more above and below. Narrower than 16:10 (4:3) gets 16:10 with bars.\n"
+    "; The picture's shape: Auto (the screen's own; the game renders edge to edge at it — wider than 16:9 shows\n"
+    "; more to the sides, narrower (an iPad's 4:3) more above and below) or a ratio such as 16:9 (letterboxed on\n"
+    "; a screen of another shape) or 21:9.\n"
     "AspectRatio = Auto\n"
     "\n"
     "; Field of view: 1.0 is the game's, above 1.0 (1.1, 1.2) shows more, below 1.0 less. 0.5 to 2.\n"
@@ -68,10 +69,10 @@ static const char DEFAULT_INI[] =
     "; Stretch: On or Off. Stretches the image to fill the whole screen (useful on 4:3 iPad displays without black bars).\n"
     "Stretch = Off\n"
     "\n"
-    "; ScaleMode: Fit, Fill or Stretch (Stretch = On above is the same as Stretch here). Fit keeps the whole picture\n"
-    "; centred with bars around it; Fill zooms it until the screen is full (no bars, a little of the picture falls\n"
-    "; outside at the sides, about 5% on an iPad); Stretch distorts it to the screen's shape. Auto: Fill on screens\n"
-    "; narrower than 16:10 (iPads), Fit elsewhere.\n"
+    "; ScaleMode: Fit, Fill or Stretch (Stretch = On above is the same as Stretch here) — how the picture meets a\n"
+    "; screen of another shape, i.e. when AspectRatio above is not Auto. Fit keeps the whole picture centred with\n"
+    "; bars around it; Fill zooms it until the screen is full (a little falls outside at the sides); Stretch\n"
+    "; distorts it. Auto: Fill on screens narrower than 16:10 (iPads), Fit elsewhere.\n"
     "ScaleMode = Auto\n"
     "\n"
     "[Anti-aliasing]\n"
@@ -478,15 +479,16 @@ void config_load(void) {
         LOG("[config] ScaleMode Auto: the screen is %.3f wide, using %s\n", wa,
             g_config.scale_mode == SCALE_FILL ? "Fill" : "Fit");
     }
-    // The picture's shape: the window's or AspectRatio's, at least 16:10. The game lays its HUD out for 16:9, which
-    // still fits down to 16:10 (a little flatter, nvn/vulkan/exec.c), so a narrower window (4:3) shows 16:10 with bars.
-    // Wider than 16:9 shows more to the sides, 16:9 to 16:10 more above and below (camera_fovy, gen.py PATCHES).
+    // The picture's shape: the window's or AspectRatio's. On iOS/iPadOS the window is floored to 16:9 above, so
+    // Auto takes the physical screen's shape (screen_w / screen_h, recorded before that floor): the game renders
+    // edge to edge — wider than 16:9 shows more to the sides, narrower (an iPad's 4:3) more above and below
+    // (Vert+ camera, camera_fovy), the HUD keeps its 16:9 shape flattened onto it (nvn/vulkan/exec.c: the 1280x720
+    // canvas floor below is what makes that flattening exact).
+#if defined(__APPLE__)
+    float aspect = g_config.aspect_ratio > 0 ? g_config.aspect_ratio : screen_w / screen_h;
+#else
     float aspect = g_config.aspect_ratio > 0 ? g_config.aspect_ratio : (float)tw / (float)th;
-    if (aspect < 1.6f - 0.005f) {
-        if (g_config.aspect_ratio > 0)
-            LOG("[config] AspectRatio %.3f is narrower than 16:10, which the HUD needs: using 16:10\n", aspect);
-        aspect = 1.6f;
-    }
+#endif
     if (fabsf(aspect - 16.0f / 9.0f) < 0.01f) aspect = 16.0f / 9.0f;  // (1366x768 and the like)
     if (render_auto) {
         fit_aspect(tw, th, aspect, &w, &h);
