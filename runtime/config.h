@@ -2,6 +2,10 @@
 #pragma once
 #include <stdint.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 enum { DISPLAY_WINDOWED, DISPLAY_FULLSCREEN, DISPLAY_BORDERLESS };
 enum { FACE_POSITION, FACE_LABEL };
 enum { COMBO_LENIENT, COMBO_STRICT };
@@ -58,3 +62,7 @@ void config_set_join(const char *join_addr);
 int config_live_combo_window(void);
 void config_window_focus(int focused);
 int config_is_window_focused(void);
+
+#ifdef __cplusplus
+}
+#endif
