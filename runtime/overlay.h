@@ -17,6 +17,7 @@ void overlay_init(const char *font_path, float font_size, int menu_key);
 bool overlay_enabled(void);
 bool overlay_menu_open(void);
 void overlay_toggle_menu(void);
+void overlay_toggle_settings(void);  // the touch controls' settings button (runtime/touch.cpp); the Forge window for now
 
 // Host main thread: an event for ImGui while the menu is open (true: taken, not for the game) - and the menu key.
 bool overlay_event(const SDL_Event *e);

@@ -7,14 +7,39 @@
 #include <SDL3/SDL.h>
 
 #include "config.h"
+#include "haptics.h"
+#include "hle/input.h"
 #include "mods.h"
 #include "rt.h"
+#include "touch.h"
 
 volatile uint64_t g_present_count;
 static SDL_Window *window;
 
 SDL_Window *ui_window(void) { return window; }
 void backend_init(void);
+
+#if defined(__APPLE__)
+#include <TargetConditionals.h>
+#if TARGET_OS_IPHONE
+// iOS: the app to the background (or gone for good). SDL's main thread is suspended with the app, so the fingers'
+// ups will not come by themselves: every control's finger gone, the buttons the game sees released, a playing
+// rumble stopped (an event watch: acted on before the call returns).
+static bool ios_lifecycle(void *ud, SDL_Event *e) {
+    (void)ud;
+    switch (e->type) {
+    case SDL_EVENT_WILL_ENTER_BACKGROUND:
+    case SDL_EVENT_TERMINATING:
+        input_set(0, 0, 0, 0, 0);
+        touch_reset();
+        haptics_stop();
+        break;
+    default: break;
+    }
+    return true;
+}
+#endif
+#endif
 
 // The window's size when windowed: the settings' size (or the last windowed size), no larger than the desktop's free
 // area with the window frame.
@@ -100,6 +125,9 @@ void ui_init(void) {
     if (!window) FATAL("SDL_CreateWindow: %s\n", SDL_GetError());
 #ifndef __APPLE__
     if (g_config.display_mode != DISPLAY_WINDOWED) set_fullscreen(true);
+#endif
+#if defined(__APPLE__) && !defined(MHGU_NULL_BACKEND) && TARGET_OS_IPHONE
+    SDL_AddEventWatch(ios_lifecycle, NULL);
 #endif
     backend_init();
 }

@@ -22,17 +22,20 @@
 
 #include "config.h"
 #include "forge.h"
+#include "haptics.h"
 #include "hle/input.h"
+#include "hle/mousecam.h"
 #include "overlay.h"
 #include "rt.h"
 #include "textinput.h"
+#include "touch.h"
 
 #define B(x) (1ull << (x))
 
 static bool keys[SDL_SCANCODE_COUNT];
 static SDL_Gamepad *pad;  // the controller read: of those open, the one a button was last pressed on
 #define MAX_PADS 8
-static struct { SDL_Gamepad *pad; uint64_t opened_ns; } pads[MAX_PADS];
+static struct { SDL_Gamepad *pad; uint64_t opened_ns; bool real; } pads[MAX_PADS];  // (real: hides the touch controls)
 static int npads;
 
 static const struct { SDL_Scancode sc; int btn; } key_buttons[] = {
@@ -69,6 +72,7 @@ static bool mouse_captured;   // relative mode on now (grabbed, and no Forge men
 static bool mouse_no_capture; // relative mode refused (WSLg, some Wayland compositors): clicks are buttons, no mouse look
 static float mouse_dx, mouse_dy;  // counts moved since the last update
 static uint64_t mouse_buttons;
+static uint64_t touch_cam_ns;  // when a finger last turned the camera (runtime/touch.cpp)
 // (tests: the control file's "mousemove <x> <y> <ms>", a mouse moving at that many counts a second, captured or not)
 static float test_vx, test_vy;
 static uint64_t test_until;
@@ -374,15 +378,36 @@ static int find_pad(SDL_JoystickID id) {
     return -1;
 }
 
+// A controller in the player's hands hides the touch controls (runtime/touch.cpp). Android calls other devices a
+// gamepad too: the emulator's keyboard ("qwerty2"), virtual and uinput devices, a phone's GPIO keys, keypads, and the
+// media keys of a USB or Bluetooth device ("... Consumer Control").
+static bool pad_is_real(SDL_Gamepad *p) {
+    static const char *const not_pads[] = {"qwerty", "virtual", "uinput", "gpio", "keypad", "consumer control"};
+    const char *name = SDL_GetGamepadName(p);
+    if (!name) return true;  // (no name: SDL still maps it as a gamepad)
+    for (unsigned i = 0; i < sizeof not_pads / sizeof *not_pads; i++)
+        if (SDL_strcasestr(name, not_pads[i])) return false;
+    return true;
+}
+
+static bool real_pad_connected(void) {  // (from the open pads every call: follows ADDED / REMOVED live)
+    for (int i = 0; i < npads; i++)
+        if (pads[i].real) return true;
+    return false;
+}
+
 static void open_pad(SDL_JoystickID id) {
     if (find_pad(id) >= 0) return;
     if (!pad_matches(id)) { log_pad(id, "gamepad skipped (MHGU_PAD)"); return; }
     if (npads == MAX_PADS) { log_pad(id, "gamepad skipped (too many)"); return; }
     SDL_Gamepad *p = SDL_OpenGamepad(id);
     if (!p) { LOG("[input] gamepad %u failed to open: %s\n", (unsigned)id, SDL_GetError()); return; }
-    pads[npads].pad = p, pads[npads++].opened_ns = plat_now_ns();
+    pads[npads].pad = p, pads[npads].opened_ns = plat_now_ns(), pads[npads].real = pad_is_real(p), npads++;
     if (!pad) pad = p, log_pad(id, "gamepad in use");
     else log_pad(id, "gamepad open too (a button pressed on it makes it the one in use)");
+    const char *name = SDL_GetGamepadName(p);
+    if (pads[npads - 1].real) LOG("[input] %s counts as a controller: touch controls hidden\n", name ? name : "?");
+    else LOG("[input] %s: not a controller for the touch controls\n", name ? name : "?");
 }
 
 // A button pressed on another open controller: that one is read from now on. Not in the first half second after it
@@ -398,10 +423,14 @@ static void close_pad(SDL_JoystickID id) {
     int i = find_pad(id);
     if (i < 0) return;
     bool was = pads[i].pad == pad;
-    const char *name = SDL_GetGamepadName(pads[i].pad);
+    const char *name = SDL_GetGamepadName(pads[i].pad);  // (its id is gone already: log_pad would find nothing)
     LOG("[input] gamepad removed%s: %s\n", was ? " (it was in use)" : "", name ? name : "?");
+    bool real = pads[i].real;
     SDL_CloseGamepad(pads[i].pad);
     pads[i] = pads[--npads];
+    if (!real) LOG("[input] (it was not a controller for the touch controls)\n");
+    else if (real_pad_connected()) LOG("[input] it counted as a controller: touch controls stay hidden (another one)\n");
+    else LOG("[input] it counted as a controller: touch controls shown again\n");
     if (was) {
         pad = npads ? pads[0].pad : NULL;
         if (pad) log_pad(SDL_GetGamepadID(pad), "gamepad in use");
@@ -417,6 +446,7 @@ static void pick_pad(void) {  // over every controller SDL sees now: those MHGU_
 
 void host_input_event(const SDL_Event *e) {
     if (e->type == SDL_EVENT_GAMEPAD_BUTTON_DOWN) pad_pressed(e->gbutton.which);
+    if (touch_event(e)) return;  // (fingers: the touch controls, or the menus' mouse: runtime/touch.cpp)
     if (overlay_event(e)) return;  // (Forge's menu open: keyboard and mouse are its)
     if (textinput_event(e)) return;  // (typing into a text entry: not controller buttons)
     switch (e->type) {
@@ -458,24 +488,6 @@ void host_input_event(const SDL_Event *e) {
         break;
     case SDL_EVENT_MOUSE_MOTION:
         if (mouse_captured) mouse_dx += e->motion.xrel, mouse_dy += e->motion.yrel;
-        break;
-    case SDL_EVENT_FINGER_DOWN: {
-        static uint64_t last_tap_ns;
-        uint64_t now_ns = plat_now_ns();
-        // Top-right corner double-tap toggles Forge menu on iPad
-        if (e->tfinger.x > 0.82f && e->tfinger.y < 0.18f) {
-            if (now_ns - last_tap_ns < 400000000ull) {
-                overlay_toggle_menu();
-                last_tap_ns = 0;
-            } else {
-                last_tap_ns = now_ns;
-            }
-        }
-        mouse_buttons |= B(BTN_A);
-        break;
-    }
-    case SDL_EVENT_FINGER_UP:
-        mouse_buttons &= ~B(BTN_A);
         break;
     case SDL_EVENT_MOUSE_BUTTON_DOWN: case SDL_EVENT_MOUSE_BUTTON_UP: {
 #if defined(__APPLE__)
@@ -538,8 +550,8 @@ static void mouse_update(int *rx, int *ry) {
         vx += (mouse_dx / dt - vx) * a, vy += (mouse_dy / dt - vy) * a;
     }
     mouse_dx = mouse_dy = 0;
-    if (!mouse_captured && now >= test_until) vx = vy = 0;
-    float s = g_config.mouse_sensitivity / MOUSE_FULL_SPEED;
+    if (!mouse_captured && now >= test_until && now - touch_cam_ns > 150000000ull) vx = vy = 0;
+    float s = config_live_mouse_sensitivity() / MOUSE_FULL_SPEED;
     float x = vx * s, y = -vy * s;  // (the mouse's y is down, the stick's up)
     float m = sqrtf(x * x + y * y);
     if (m < 0.02f) return;
@@ -548,12 +560,14 @@ static void mouse_update(int *rx, int *ry) {
 }
 
 // The game's rumble (input_rumble) to the controller: on a change, at most every 16 ms (the game sends a value every
-// 5 ms, and a DualSense over Bluetooth takes a packet per call), renewed while it lasts, stopped at once.
+// 5 ms, and a DualSense over Bluetooth takes a packet per call), renewed while it lasts, stopped at once. And to the
+// phone's own vibrator, with or without a controller ([Controls] PhoneRumble, runtime/haptics.c).
 static void rumble_update(void) {
     static uint32_t sent, peak;
     static uint64_t sent_ns, on_ns;
     static SDL_Gamepad *sent_pad;
     uint32_t v = input_rumble();
+    haptics_rumble(v);
     uint64_t now = plat_now_ns();
     if (v && !on_ns) on_ns = now, peak = 0;  // (the log: each rumble's length and strongest motor values)
     if (v) peak = ((v >> 16) > (peak >> 16) ? v & 0xFFFF0000u : peak & 0xFFFF0000u) | ((v & 0xFFFF) > (peak & 0xFFFF) ? v & 0xFFFF : peak & 0xFFFF);
@@ -590,6 +604,10 @@ void host_input_update(void) {
     if (kx && ky) k = k * 7071 / 10000;  // diagonals: same length as straight
     lx += kx * k, ly += ky * k;
     b |= mouse_buttons;
+    float tdx = 0, tdy = 0;  // (the touch controls: buttons, the stick, and a drag that turns the camera as the mouse)
+    touch_input(real_pad_connected(), typing, &b, &lx, &ly, &tdx, &tdy);  // (a real controller open hides them)
+    if (tdx != 0 || tdy != 0) mouse_dx += tdx, mouse_dy += tdy, touch_cam_ns = plat_now_ns();
+    bool mouse_moved = mouse_dx != 0 || mouse_dy != 0;  // (the mouse or a finger turning the camera: the lock-on waits)
     mouse_update(&rx, &ry);
 
     if (pad) {
@@ -600,8 +618,21 @@ void host_input_update(void) {
             {SDL_GAMEPAD_BUTTON_DPAD_LEFT, BTN_LEFT}, {SDL_GAMEPAD_BUTTON_DPAD_RIGHT, BTN_RIGHT},
             {SDL_GAMEPAD_BUTTON_LEFT_STICK, BTN_LSTICK}, {SDL_GAMEPAD_BUTTON_RIGHT_STICK, BTN_RSTICK},
         };
+        // combined buttons on the controller's own ([Touch] Combo*Pad): that button is theirs now, not what it was
+        static const SDL_GamepadButton pad_of[PADB_COUNT] = {
+            SDL_GAMEPAD_BUTTON_INVALID, SDL_GAMEPAD_BUTTON_LEFT_STICK, SDL_GAMEPAD_BUTTON_RIGHT_STICK, SDL_GAMEPAD_BUTTON_BACK,
+            SDL_GAMEPAD_BUTTON_GUIDE, SDL_GAMEPAD_BUTTON_MISC1, SDL_GAMEPAD_BUTTON_RIGHT_PADDLE1, SDL_GAMEPAD_BUTTON_LEFT_PADDLE1,
+            SDL_GAMEPAD_BUTTON_RIGHT_PADDLE2, SDL_GAMEPAD_BUTTON_LEFT_PADDLE2, SDL_GAMEPAD_BUTTON_TOUCHPAD};
+        uint64_t taken = 0;
+        for (int i = 0; i < TOUCH_COMBOS; i++) {
+            int on = config_live_touch_combo_pad(i);
+            uint32_t combo = config_live_touch_combo(i);
+            if (on <= PADB_NONE || on >= PADB_COUNT || !combo) continue;
+            taken |= 1ull << pad_of[on];
+            if (SDL_GetGamepadButton(pad, pad_of[on])) b |= combo;
+        }
         for (unsigned i = 0; i < sizeof pad_buttons / sizeof *pad_buttons; i++)
-            if (SDL_GetGamepadButton(pad, pad_buttons[i].sdl)) b |= B(pad_buttons[i].btn);
+            if (!(taken >> pad_buttons[i].sdl & 1) && SDL_GetGamepadButton(pad, pad_buttons[i].sdl)) b |= B(pad_buttons[i].btn);
 
         // Controller shortcut: L3 + R3 (both thumbsticks pressed) or Minus + Plus toggles Forge overlay
         static bool s_overlay_combo_prev;
@@ -672,6 +703,15 @@ void host_input_update(void) {
         if (st->stick == 0) lx = st->x, ly = st->y;
         if (st->stick == 1) rx = st->x, ry = st->y;
     }
+
+    // The right stick's click in a hunt turns the lock-on on or off (the camera kept on the target, as in the newer
+    // games: runtime/touch.cpp); elsewhere it is the game's
+    static bool rstick_was;
+    bool rstick = (b & B(BTN_RSTICK)) && mousecam_active() && config_live_lock_on();
+    if (rstick && !rstick_was) touch_lock_toggle();
+    rstick_was = rstick;
+    if (rstick) b &= ~B(BTN_RSTICK);
+    b |= touch_lock_buttons(b, mouse_moved || (int64_t)rx * rx + (int64_t)ry * ry > 12000LL * 12000);  // (round: as the game's)
 
     static bool menu;
     if (overlay_menu_open() != menu) {

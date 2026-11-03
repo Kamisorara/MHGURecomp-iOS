@@ -12,6 +12,7 @@
 // The menu opens and closes with the key of Forge's config (nativeNX/forge/config.ini [menu] key; Insert by default).
 #include <algorithm>
 #include <atomic>
+#include <cfloat>
 #include <cstdio>
 #include <mutex>
 #include <vector>
@@ -39,6 +40,7 @@ static void ImGui_ImplVulkan_UpdateTexture(ImTextureData *) {}
 #include "forge.h"
 #include "overlay.h"
 #include "romfs.h"
+#include "touch.h"
 
 #define LOG(...) (fprintf(stderr, __VA_ARGS__), fflush(stderr))
 
@@ -58,6 +60,7 @@ static float g_scale;
 struct Ev {
     enum { POS, BUTTON, WHEEL, KEY, TEXT, FOCUS, CLEAR } kind;
     bool down;
+    bool touch;  // (POS, BUTTON: a finger's - ImGui then knows there was no hover before it, and none after it lifts)
     int button;
     float x, y;
     ImGuiKey key;
@@ -148,6 +151,16 @@ void overlay_toggle_menu(void) {
     if (g_enabled) set_open(!g_open);
 }
 
+// The touch controls' settings button (runtime/touch.cpp). The port's own settings menu (settings_panel.cpp) is a
+// later port; until then the Forge window is where the settings live, so it opens that.
+void overlay_toggle_settings(void) {
+    overlay_toggle_menu();
+}
+
+// A finger as the menus' mouse: SDL's own mouse events made from a touch, or runtime/touch.cpp's (to_menu), which
+// makes them by hand and gives no time
+static bool finger_mouse(SDL_MouseID which, Uint64 timestamp) { return which == SDL_TOUCH_MOUSEID || !timestamp; }
+
 bool overlay_event(const SDL_Event *e) {
     if (!g_enabled) return false;
     if (e->type == SDL_EVENT_KEY_DOWN && !e->key.repeat && (int)e->key.scancode == g_menu_key) {
@@ -161,12 +174,14 @@ bool overlay_event(const SDL_Event *e) {
     switch (e->type) {
     case SDL_EVENT_MOUSE_MOTION:
         v.kind = Ev::POS, v.x = e->motion.x * density, v.y = e->motion.y * density;
+        v.touch = finger_mouse(e->motion.which, e->motion.timestamp);
         break;
     case SDL_EVENT_MOUSE_BUTTON_DOWN: case SDL_EVENT_MOUSE_BUTTON_UP: {
         static const int map[] = {-1, ImGuiMouseButton_Left, ImGuiMouseButton_Middle, ImGuiMouseButton_Right, 3, 4};
         if (e->button.button >= 6 || map[e->button.button] < 0) return true;
         v.kind = Ev::BUTTON, v.button = map[e->button.button], v.down = e->type == SDL_EVENT_MOUSE_BUTTON_DOWN;
         v.x = e->button.x * density, v.y = e->button.y * density;
+        v.touch = finger_mouse(e->button.which, e->button.timestamp);
         break;
     }
     case SDL_EVENT_MOUSE_WHEEL:
@@ -237,10 +252,15 @@ static void apply_input(ImGuiIO &io) {
     }
     for (const Ev &e : evs) {
         switch (e.kind) {
-        case Ev::POS: io.AddMousePosEvent(e.x, e.y); break;
+        case Ev::POS:
+            io.AddMousePosEvent(e.x, e.y);
+            io.AddMouseSourceEvent(e.touch ? ImGuiMouseSource_TouchScreen : ImGuiMouseSource_Mouse);
+            break;
         case Ev::BUTTON:
             io.AddMousePosEvent(e.x, e.y);
             io.AddMouseButtonEvent(e.button, e.down);
+            io.AddMouseSourceEvent(e.touch ? ImGuiMouseSource_TouchScreen : ImGuiMouseSource_Mouse);
+            if (e.touch && !e.down) io.AddMousePosEvent(-FLT_MAX, -FLT_MAX);  // (the finger is gone: nothing stays hovered)
             break;
         case Ev::WHEEL: io.AddMouseWheelEvent(e.x, e.y); break;
         case Ev::KEY:
@@ -397,8 +417,9 @@ static void snap_clear(void) {
 void overlay_frame(void *cpu) {
     if (!g_ready) return;
     bool open = g_open, free_render = forge_plugins_have(FORGE_IMGUI_FREE_RENDER);
+    bool touch = touch_visible();
     ImGuiIO &io = ImGui::GetIO();
-    if (!open && !free_render) {  // (nothing to draw)
+    if (!open && !free_render && !touch) {  // (nothing to draw)
         std::lock_guard<std::mutex> l(g_snap_lock);
         if (g_snap.Valid) snap_clear();
         apply_input(io);  // (keep the queue short)
@@ -540,6 +561,7 @@ void overlay_frame(void *cpu) {
         if (!keep) set_open(false);
     }
     forge_imgui_run(cpu, FORGE_IMGUI_FREE_RENDER);
+    if (touch) touch_draw((float)w, (float)h);  // (the touch controls: runtime/touch.cpp)
     ImGui::Render();
 
     ImDrawData *dd = ImGui::GetDrawData();
