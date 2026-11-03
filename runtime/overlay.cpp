@@ -579,7 +579,7 @@ void overlay_frame(void *cpu) {
         style.FontScaleDpi = scale;
         g_scale = scale;
     }
-    uint64_t now = SDL_GetTicksNS();
+    now = SDL_GetTicksNS();
     io.DeltaTime = g_last_ns ? std::clamp((now - g_last_ns) / 1e9f, 1e-4f, 0.1f) : 1.0f / 30;
     g_last_ns = now;
     apply_input(io);
