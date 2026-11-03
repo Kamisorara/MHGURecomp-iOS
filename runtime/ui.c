@@ -221,9 +221,10 @@ static bool ios_lifecycle(void *ud, SDL_Event *e) {
 #endif
 
 void ui_init(void) {
-#ifdef __ANDROID__
+#if defined(__ANDROID__) || MHGU_PHONE
     // Touches are not mouse clicks here (a click is X / A and the mouse turns the camera: host_input.c), and the
-    // window is the screen, in landscape.
+    // window is the screen, in landscape. (Without this SDL synthesizes a click for every finger: with A bound to
+    // the mouse's button by default, touching the stick pressed A.)
     SDL_SetHint(SDL_HINT_TOUCH_MOUSE_EVENTS, "0");
     SDL_SetHint(SDL_HINT_ORIENTATIONS, "LandscapeLeft LandscapeRight");
 #endif
