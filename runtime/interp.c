@@ -509,7 +509,7 @@ static uint32_t signed_mul(Cpu *c, uint32_t pc, uint32_t w) {
 
 static uint32_t media(Cpu *c, uint32_t pc, uint32_t w) {
     uint32_t op1 = BITS(w, 20, 5), op2 = BITS(w, 5, 3), rd = BITS(w, 12, 4), rm = BITS(w, 0, 4);
-    if ((op1 & 0x1C) == 0) {  // parallel add/sub
+    if ((op1 & 0x18) == 0 && (op1 & 3)) {  // parallel add/sub: signed (op1 1-3) and unsigned (5-7: UADD8, UQSUB8...)
         c->r[rd] = rt_parallel(c, (BITS(w, 20, 3) << 3) | op2, RR(c, pc, BITS(w, 16, 4)), RR(c, pc, rm));
         return pc + 4;
     }
@@ -960,11 +960,15 @@ static void three_same(Cpu *c, uint32_t pc, uint32_t w) {
         for (uint32_t i = 0; i < k; i++) c->v.s[d * 2 + i] = t[i];
         return;
     }
-    if (A == 0xB && B && !U) {  // VPADD integer
+    if ((A == 0xB && B && !U) || (A == 0xA && size < 64)) {  // VPADD / VPMAX / VPMIN integer
         uint32_t per = 64 / size;
         uint64_t vals[16], t[8];
         for (uint32_t i = 0; i < per; i++) { vals[i] = lget(c, n, i, size); vals[per + i] = lget(c, m, i, size); }
-        for (uint32_t i = 0; i < per; i++) t[i] = (vals[2 * i] + vals[2 * i + 1]) & lmask(size);
+        for (uint32_t i = 0; i < per; i++) {
+            uint64_t a = vals[2 * i], b = vals[2 * i + 1];
+            int gt = U ? a > b : sx(a, size) > sx(b, size);
+            t[i] = A == 0xB ? (a + b) & lmask(size) : (B ? !gt : gt) ? a : b;
+        }
         for (uint32_t i = 0; i < per; i++) lset(c, d, i, size, t[i]);
         return;
     }
