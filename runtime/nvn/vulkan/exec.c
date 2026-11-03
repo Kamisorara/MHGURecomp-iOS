@@ -2382,9 +2382,9 @@ static VkDescriptorBufferInfo cbuf_info(int stage, ShaderInfo *si, int k, uint32
                     // too, driven with the d-pad and A / B: the touch controls' menu layout)
                     touch_hud_menu();
                 }
-                // [Display] ScaleMode Fill: the backdrop itself covers the wider screen, in its shape (cut above and below)
-                bool backdrop_fill = backdrop && g_config.scale_mode == SCALE_FILL && s < 1.0f;
-                bool backdrop_tall = backdrop && g_config.scale_mode == SCALE_FILL && sy < 1.0f;  // (narrower: as high as the screen, cut at the sides)
+                // [Display] FillScreen: the backdrop itself covers the wider screen, in its shape (cut above and below)
+                bool backdrop_fill = backdrop && g_config.fill_screen && s < 1.0f;
+                bool backdrop_tall = backdrop && g_config.fill_screen && sy < 1.0f;  // (narrower: as high as the screen, cut at the sides)
                 float anchor_aspect = ui_frontend_pass ? 16.0f / 9.0f : g_ui_anchor_aspect;  // (config.c: 16:9 .. the screen's)
                 if (anchor_aspect > g_render_aspect) anchor_aspect = g_render_aspect;
                 float a_ratio = anchor_aspect / g_render_aspect;
@@ -2837,7 +2837,7 @@ static bool movie_viewport(NvnTexture *y, const float *vp, float out[4]) {
     float movie = (float)y->width / (float)y->height, screen = vp[2] / vp[3];
     if (fabsf(movie / screen - 1.0f) < 0.01f) return false;
     float w = vp[2], h = vp[3];
-    if (screen > movie && g_config.scale_mode == SCALE_FILL) h = w / movie;  // (ScaleMode Fill: as wide as the screen, cut above and below)
+    if (screen > movie && g_config.fill_screen) h = w / movie;  // ([Display] FillScreen: as wide as the screen, cut above and below)
     else if (screen > movie) w = h * movie;
     else h = w / movie;
     out[0] = (vp[2] - w) * 0.5f, out[1] = (vp[3] - h) * 0.5f, out[2] = w, out[3] = h;

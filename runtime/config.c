@@ -1063,7 +1063,7 @@ void config_load(void) {
     config_store_loaded(&g_config);
     const SDL_DisplayMode *dm = SDL_GetDesktopDisplayMode(SDL_GetPrimaryDisplay());
     desktop_w = dm ? dm->w : 1920, desktop_h = dm ? dm->h : 1080;
-#ifdef __ANDROID__
+#if defined(__ANDROID__) || MHGU_PHONE
     // (the game is always landscape, but a phone that is locked or still upright says otherwise: the 3D picture and the
     // HUD would be laid out for that shape, narrow, with black at the sides, until the next start)
     if (desktop_h > desktop_w) {
@@ -1103,6 +1103,18 @@ void config_load(void) {
 
     int tw = g_config.width, th = g_config.height;  // (Borderless shows the image at the desktop size)
     if (g_config.display_mode == DISPLAY_BORDERLESS) tw = tw < desktop_w ? tw : desktop_w, th = th < desktop_h ? th : desktop_h;
+    // The picture's scale mode: Fit / Fill / Stretch, Auto decided by the screen's shape. Fill zooms until the
+    // screen is full (backend_present: the oversized viewport is cropped by the full-screen scissor, no bars on
+    // an iPad's 4:3 screen); Fit keeps the whole picture with bars. Stretch = On (the older setting) wins when
+    // ScaleMode is Auto.
+    if ((e = getenv("MHGU_STRETCH"))) g_config.stretch = atoi(e) != 0;
+    if (g_config.stretch && g_config.scale_mode == SCALE_AUTO) g_config.scale_mode = SCALE_STRETCH;
+    if (g_config.scale_mode == SCALE_AUTO) {
+        float wa = (float)desktop_w / (float)desktop_h;  // (tw/th can be a saved window size: not the screen's shape)
+        g_config.scale_mode = wa < 1.55f ? SCALE_FILL : SCALE_FIT;
+        LOG("[config] ScaleMode Auto: the screen is %.3f wide, using %s\n", wa,
+            g_config.scale_mode == SCALE_FILL ? "Fill" : "Fit");
+    }
     // The picture's shape: the window's or AspectRatio's. The game lays its HUD out for 16:9; on a narrower picture it keeps
     // that shape, smaller, its parts at the top and bottom edges (nvn/vulkan/exec.c). Android: down to 5:4, a console's 4:3
     // screen filled. Wider than 16:9 shows more to the sides, narrower more above and below (camera_fovy, gen.py PATCHES).
@@ -1180,9 +1192,6 @@ void config_load(void) {
     g_ui_size[1] = 720;
     g_ui_size[0] = (uint32_t)(720.0f * g_ui_anchor_aspect + 0.5f) & ~1u;
     if (g_ui_size[0] < 1280) g_ui_size[0] = 1280;
-
-    if ((e = getenv("MHGU_STRETCH"))) g_config.stretch = atoi(e) != 0;
-    if (g_config.stretch && g_config.scale_mode == SCALE_AUTO) g_config.scale_mode = SCALE_STRETCH;
 
     config_runtime_init(&g_config);
 
