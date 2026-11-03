@@ -10290,7 +10290,7 @@ L_47ca28:;
     goto L_47cc50;
 L_47ca80:;
     c->r[0] = 0x1448u;
-    c->v.s[2] = 0xbf800000u;
+    { extern float combowin_tick(void); c->v.f[2] = -combowin_tick(); }
     c->r[0] = c->r[4] + c->r[0];
     c->v.s[0] = LD32(c->r[0]);
     c->v.f[0] = c->v.f[0] + c->v.f[2];

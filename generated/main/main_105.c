@@ -16196,7 +16196,7 @@ L_834d00:;
     { uint32_t ea = c->r[0] + 0x4u; uint32_t v = LD32(ea); c->r[7] = v; }
     (void)f_subs(c, c->r[7], 0x0u);
     if (COND_LE) { goto L_834dec; }
-    c->r[7] = c->r[7] - 0x1u;
+    { extern uint32_t buffcycle_tick(void); c->r[7] -= buffcycle_tick(); }
     c->r[10] = c->r[1] + 0x8u;
     c->r[12] = 0x1u;
     { uint32_t ea = c->r[0] + 0x4u; ST32(ea, c->r[7]); }
@@ -16331,7 +16331,7 @@ L_834ee4:;
     goto L_834f04;
 L_834ef0:;
     { uint32_t ea = c->r[13]; uint32_t v = LD32(ea); c->r[1] = v; }
-    c->r[0] = 0x14u;
+    { extern uint32_t buffcycle_reload(void); c->r[0] = buffcycle_reload(); }
     { uint32_t ea = c->r[1]; ST32(ea, c->r[9]); }
     { uint32_t ea = c->r[1] + 0x4u; ST32(ea, c->r[0]); }
     c->r[0] = 0x1u;

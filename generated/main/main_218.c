@@ -8381,7 +8381,6 @@ L_dbe7bc:;
     (void)f_subs(c, c->r[0], 0x0u);
     if (COND_EQ) { goto L_dbe7d8; }
 L_dbe7d0:;
-    goto L_dbe7d8;
     c->r[0] = c->r[4] + 0x1e0u;
     c->r[14] = 0xdbe7d8u; f_15f0dd8(c);
 L_dbe7d8:;
@@ -8389,8 +8388,6 @@ L_dbe7d8:;
     c->r[14] = 0xdbe7e0u; f_dc0524(c);
     c->r[0] = 0x0u;
     { uint32_t ea = c->r[4] + 0x19u; ST8(ea, c->r[0]); }
-    { uint32_t ea = c->r[4] + 0x1eu; ST8(ea, c->r[0]); }
-    { uint32_t ea = c->r[4] + 0x1fu; ST8(ea, c->r[0]); }
 L_dbe7e8:;
     c->r[13] = c->r[13] + 0xcu;
     { uint32_t ea = c->r[13]; c->r[13] = c->r[13] + 36u; c->r[4] = LD32(ea + 0u); c->r[5] = LD32(ea + 4u); c->r[6] = LD32(ea + 8u); c->r[7] = LD32(ea + 12u); c->r[8] = LD32(ea + 16u); c->r[9] = LD32(ea + 20u); c->r[10] = LD32(ea + 24u); c->r[11] = LD32(ea + 28u); c->pc = LD32(ea + 32u); } return;
