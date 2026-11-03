@@ -25,7 +25,11 @@ static uint32_t g_quest;          // the quest to start (0: off)
 static volatile bool g_in_town;   // set by the game thread at the first town update
 static bool g_done;
 
+volatile uint64_t g_town_ns;  // when a town's walking-around update last ran (plat_now_ns: the touch controls'
+                              // layout, runtime/touch.cpp)
+
 static void town_idle(Cpu *c) {
+    g_town_ns = plat_now_ns();
     if (g_quest && !g_done) {
         g_done = true;
         g_in_town = true;

@@ -55,6 +55,13 @@ PATCHES = {
     # uScheduler's update (push {r4, lr}): runtime/hle/evskip.c speeds up an event camera pan when A is pressed
     ('main', 0xb66164): (0xE92D4010, '{ extern void evskip_update(Cpu *); evskip_update(c); '
                                      'uint32_t ea = c->r[13] - 8u; ST32(ea, c->r[4]); ST32(ea + 4u, c->r[14]); c->r[13] = ea; }'),
+    # Buff icon cycle on the HUD's status plates (runtime/hle/buffcycle.c): the countdown's `sub r7, r7, #1` per update
+    # and its reload `mov r0, #20` count in the frame step instead of updates
+    ('main', 0x834d20): (0xE2477001, '{ extern uint32_t buffcycle_tick(void); c->r[7] -= buffcycle_tick(); }'),
+    ('main', 0x834ef4): (0xE3A00014, '{ extern uint32_t buffcycle_reload(void); c->r[0] = buffcycle_reload(); }'),
+    # Two-button input window (runtime/hle/combowin.c): the countdown a press waits for a second button takes 1.0 off
+    # per update (`vmov.f32 s2, #-1.0`); it takes the frame step instead
+    ('main', 0x47ca84): (0xEEBF1A00, '{ extern float combowin_tick(void); c->v.f[2] = -combowin_tick(); }'),
 }
 
 # Monster jump physics (runtime/hle/emjump.c): the stores of `pos += vel; vel += acc; acc.y += -0.2`, done once per

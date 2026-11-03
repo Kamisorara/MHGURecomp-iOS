@@ -9,6 +9,8 @@
 
 #include "gamelib.h"
 #include "hle.h"
+#include "hle/itembar.h"
+#include "hle/mousecam.h"
 #include "kernel.h"
 #include "mods.h"
 
@@ -50,8 +52,11 @@ static void boot(const char *root) {
     forge_init();  // (Forge plugins in the mods: runtime/forge.c)
     hpscale_init();  // (large monster HP by the number of hunters: runtime/hle/hpscale.c)
     villagehub_init();  // (Village quests at the Hub / Pub counter: runtime/hle/villagehub.c)
+    mashrate_init();  // (mashing out of a stun at high frame rates: runtime/hle/mashrate.c)
     movelog_init();  // (debug, MHGU_LOG_MOVES: runtime/hle/movelog.c)
     quickhunt_init();  // (debug, MHGU_QUICKHUNT: runtime/hle/quickhunt.c)
+    mousecam_init();  // (mouse look and the touch camera on the hunt camera's angles: runtime/hle/mousecam.c)
+    itembar_init();  // (the mouse wheel on the item bar; its hook the item bar's touch taps ride: runtime/hle/itembar.c)
     emtrace_init();  // (debug, MHGU_EMTRACE: runtime/hle/emtrace.c)
     cheats_init();  // (cheat codes from cheats/: runtime/cheats.c)
 
