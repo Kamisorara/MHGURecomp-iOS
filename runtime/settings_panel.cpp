@@ -403,6 +403,7 @@ bool equal(const Config &a, const Config &b) {
     SAME(fov);
     SAME(ui_anchor);
     SAME(fill_screen);
+    SAME(scale_mode);
     SAME(background_input);
     SAME(combo_window);
     SAME(volume);
@@ -837,6 +838,7 @@ void reset_section() {
         c.fov = f.fov;
         c.ui_anchor = f.ui_anchor;
         c.fill_screen = f.fill_screen;
+        c.scale_mode = f.scale_mode;
         break;
     case 1:
         c.low_end = f.low_end;
@@ -1165,6 +1167,10 @@ std::vector<Row> main_rows() {
             r, "anchor", "HUD anchor", c.ui_anchor - 1, {"16:9", "21:9", "32:9", tr("Edges")},
             [](int v) { c.ui_anchor = v + 1; }, ini("UIAnchor"));
         add_bool(r, "fill", "Fill the screen", &c.fill_screen, ini("FillScreen"));
+        add_choice(r, "display.scale", "Screen fit", c.scale_mode, {"Fit", "Fill", "Stretch", "Auto"},
+                   [](int v) { c.scale_mode = v; }, ini("ScaleMode"));
+        r.back().help = tr("How the picture meets a screen of another shape. Auto fills a 4:3 iPad's screen and "
+                           "keeps the whole picture with bars on a 16:9 TV's.");
         break;
     case 1:
         add_choice(

@@ -593,11 +593,14 @@ void backend_present(NvnTexture *t) {
         // the game's image, centred: Fit (as large as fits with its aspect ratio), Fill (zoomed until the screen is
         // full; the viewport outgrows it and the full-screen scissor crops the excess) or Stretch (distorted to it)
         double ww = g_vk.sc_extent.width, wh = g_vk.sc_extent.height;
+        int scale_mode = g_config.scale_mode;
+        if (scale_mode == SCALE_AUTO)  // (config.c resolves it at boot; here as well, for a swapchain of another shape)
+            scale_mode = ww / wh < 1.55f ? SCALE_FILL : SCALE_FIT;
         double vw, vh;
-        if (g_config.scale_mode == SCALE_STRETCH) {
+        if (scale_mode == SCALE_STRETCH) {
             vw = ww;
             vh = wh;
-        } else if (g_config.scale_mode == SCALE_FILL) {
+        } else if (scale_mode == SCALE_FILL) {
             double s = fmax(ww / t->width, wh / t->height);
             vw = t->width * s;
             vh = t->height * s;
