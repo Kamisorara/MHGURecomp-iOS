@@ -40,7 +40,7 @@ static CHHapticEngine *eng(void) {
     if (ready < 0) return NULL;
     if (engine) return engine;
     NSError *err = nil;
-    CHHapticEngine *e = [CHHapticEngine engineAndReturnError:&err];
+    CHHapticEngine *e = [[CHHapticEngine alloc] initAndReturnError:&err];
     if (!e) {
         LOG("[haptics] no CoreHaptics engine: %s\n", err.localizedDescription.UTF8String ?: "?");
         ready = -1;
@@ -64,8 +64,8 @@ static void play(CHHapticEvent *ev) {
     CHHapticEngine *e = eng();
     if (!e) return;
     NSError *err = nil;
-    CHHapticPattern *pat = [[CHHapticPattern alloc] initWithEvents:@[ ev ] parameters:@[]];
-    id<CHHapticPatternPlayer> p = [e createPlayerWithPattern:pat error:&err];
+    CHHapticPattern *pat = [[CHHapticPattern alloc] initWithEvents:@[ ev ] parameters:@[] error:&err];
+    id<CHHapticPatternPlayer> p = pat ? [e createPlayerWithPattern:pat error:&err] : nil;
     if (!p) return;
     [p startAtTime:0 error:&err];
 }
@@ -77,7 +77,7 @@ void haptics_tap(void) {
     if (!eng()) return;
     tap_ns = now;
     play([[CHHapticEvent alloc] initWithEventType:CHHapticEventTypeHapticTransient parameters:@[
-        [[CHHapticEventParameter alloc] initWithParameterID:CHHapticEventParameterIDIntensity value:1.0f]
+        [[CHHapticEventParameter alloc] initWithParameterID:CHHapticEventParameterIDHapticIntensity value:1.0f]
     ] relativeTime:0]);
     if (rumble_amp && rumble_due > now + TAP_RESUME_NS) rumble_due = now + TAP_RESUME_NS;
 }
@@ -87,7 +87,8 @@ void haptics_rumble(uint32_t v) {
     bool on = s >= FLOOR && config_live_phone_rumble();
     if (!on && !rumble_amp) return;  // (nothing playing, nothing wanted: almost always)
     if (!on) {
-        [rumble_player stopAtTime:0];
+        NSError *err = nil;
+        [rumble_player stopAtTime:0 error:&err];
         rumble_player = nil;
         rumble_amp = 0;
         return;
@@ -101,16 +102,16 @@ void haptics_rumble(uint32_t v) {
     float f = amp / 255.0f;
     CHHapticEvent *ev = [[CHHapticEvent alloc]
         initWithEventType:CHHapticEventTypeHapticContinuous
-               parameters:@[ [[CHHapticEventParameter alloc] initWithParameterID:CHHapticEventParameterIDIntensity value:f] ]
+               parameters:@[ [[CHHapticEventParameter alloc] initWithParameterID:CHHapticEventParameterIDHapticIntensity value:f] ]
               relativeTime:0
                   duration:RUMBLE_MS / 1000.0];
     NSError *err = nil;
     CHHapticEngine *e = eng();
     if (!e) return;
-    CHHapticPattern *pat = [[CHHapticPattern alloc] initWithEvents:@[ ev ] parameters:@[]];
-    id<CHHapticPatternPlayer> p = [e createPlayerWithPattern:pat error:&err];
+    CHHapticPattern *pat = [[CHHapticPattern alloc] initWithEvents:@[ ev ] parameters:@[] error:&err];
+    id<CHHapticPatternPlayer> p = pat ? [e createPlayerWithPattern:pat error:&err] : nil;
     if (!p) return;
-    [rumble_player stopAtTime:0];  // (the previous one-shot, if its renewal came early)
+    [rumble_player stopAtTime:0 error:&err];  // (the previous one-shot, if its renewal came early)
     [p startAtTime:0 error:&err];
     rumble_player = p;
     rumble_amp = amp, rumble_ns = now, rumble_due = now + RENEW_NS;
@@ -118,7 +119,8 @@ void haptics_rumble(uint32_t v) {
 
 void haptics_stop(void) {
     if (ready <= 0) return;  // (nothing was ever sent)
-    [rumble_player stopAtTime:0];
+    NSError *err = nil;
+    [rumble_player stopAtTime:0 error:&err];
     rumble_player = nil;
     rumble_amp = 0;
 }

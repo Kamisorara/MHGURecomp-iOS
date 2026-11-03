@@ -165,7 +165,7 @@ $(O)/rt/forge_imgui.o: RTFLAGS += -DCIMGUI_NO_EXPORT -Wno-unused-variable
 $(O)/rt/platform/darwin.o: RTFLAGS += -x objective-c
 
 ifeq ($(PLATFORM),darwin)
-$(O)/rt/haptics.o: RTFLAGS += -x objective-c  # (the CoreHaptics paths, #if __APPLE__: plain C elsewhere)
+$(O)/rt/haptics.o: RTFLAGS += -x objective-c -fobjc-arc  # (the CoreHaptics paths, #if __APPLE__: plain C elsewhere)
 endif
 
 $(O)/rt/overlay.o: runtime/overlay.cpp runtime/overlay.h runtime/forge.h runtime/config.h
