@@ -119,7 +119,7 @@ GAMELIB_SRCS := tools/gen.py tools/lifter.py tools/neon.py tools/nso.py tools/ga
                 runtime/hle/hle_symbols.txt runtime/cpu.h runtime/vfp.h runtime/neon_rt.h runtime/gamelib.h
 GAMELIB_ID := $(shell (cat $(GAMELIB_SRCS); echo '$(GENFLAGS)') | (sha256sum 2>/dev/null || shasum -a 256) | cut -c1-16)
 
-RT_OBJ   = $(patsubst runtime/%.c,$(O)/rt/%.o,$(RT_SRC)) $(RT_CXX) $(O)/rt/overlay.o $(O)/rt/touch.o $(IMGUI_OBJ)
+RT_OBJ   = $(patsubst runtime/%.c,$(O)/rt/%.o,$(RT_SRC)) $(RT_CXX) $(O)/rt/overlay.o $(O)/rt/touch.o $(O)/rt/settings_panel.o $(O)/rt/perfstats.o $(IMGUI_OBJ)
 # Dear ImGui with cimgui's C API (third_party/cimgui: Forge plugins' ImGui, runtime/forge_imgui.c, overlay.cpp)
 IMGUI    := third_party/cimgui
 IMGUI_SRC := $(IMGUI)/cimgui.cpp $(addprefix $(IMGUI)/imgui/,imgui.cpp imgui_draw.cpp imgui_tables.cpp imgui_widgets.cpp imgui_demo.cpp)
@@ -175,6 +175,16 @@ $(O)/rt/overlay.o: runtime/overlay.cpp runtime/overlay.h runtime/forge.h runtime
 $(O)/rt/touch.o: runtime/touch.cpp runtime/touch.h runtime/config.h runtime/overlay.h runtime/haptics.h
 	@mkdir -p $(dir $@)
 	$(CXX) $(IMGUIFLAGS) -Wall -Iruntime -c $< -o $@
+
+$(O)/rt/settings_panel.o: runtime/settings_panel.cpp runtime/settings_panel.h runtime/config.h runtime/menu_confirm.h \
+                         runtime/settings_locale.h runtime/settings_icons.h runtime/app_actions.h runtime/cheats.h \
+                         runtime/overlay.h runtime/padmap.h runtime/keymap.h runtime/modorder.h runtime/touch.h
+	@mkdir -p $(dir $@)
+	$(CXX) $(IMGUIFLAGS) -w -Iruntime -c $< -o $@
+
+$(O)/rt/perfstats.o: runtime/perfstats.cpp runtime/perfstats.h runtime/config.h
+	@mkdir -p $(dir $@)
+	$(CXX) $(IMGUIFLAGS) -w -Iruntime -c $< -o $@
 
 $(O)/imgui/%.o: $(IMGUI)/%.cpp
 	@mkdir -p $(dir $@)
