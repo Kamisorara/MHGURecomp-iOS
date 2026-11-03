@@ -191,6 +191,8 @@ static int count_files(const char *dir, int depth) {
 }
 int plat_count_files(const char *dir) { return count_files(dir, 0); }
 
+int plat_is_tablet(void) { return 0; }
+
 void plat_error_box(const char *msg) { MessageBoxA(NULL, msg, "MHGU Recomp", MB_OK | MB_ICONERROR); }
 
 void plat_fatal_notice(void) {

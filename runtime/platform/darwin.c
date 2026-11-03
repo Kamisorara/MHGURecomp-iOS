@@ -641,6 +641,15 @@ static int count_files(const char *dir, int depth) {
 }
 int plat_count_files(const char *dir) { return count_files(dir, 0); }
 
+// An iPad (the touch controls' sizes: runtime/touch.cpp). macOS: no.
+int plat_is_tablet(void) {
+#if defined(TARGET_OS_IPHONE) && TARGET_OS_IPHONE
+    return [[UIDevice currentDevice] userInterfaceIdiom] == UIUserInterfaceIdiomPad;
+#else
+    return 0;
+#endif
+}
+
 void plat_error_box(const char *msg) {
     fprintf(stderr, "\n*** %s\n", msg);
     fflush(stderr);

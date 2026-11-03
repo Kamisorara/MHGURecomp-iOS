@@ -50,6 +50,8 @@ bool plat_user_dir(char *buf, size_t size);
 // The files in a folder and its subfolders, 0 if it can't be read (main.c: whether the player's romfs is complete;
 // the system's own listing, not a stat per file: ~80 ms for the game's 35531 files).
 int plat_count_files(const char *dir);
+// The screen is a tablet's (an iPad: the touch controls size themselves for a phone otherwise).
+int plat_is_tablet(void);
 void plat_error_box(const char *msg);
 void plat_fatal_notice(void);
 void plat_show_missing_files_screen(const char *main_path, const char *doc_path);

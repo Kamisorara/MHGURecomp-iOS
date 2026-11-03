@@ -44,6 +44,7 @@
 #include "config.h"
 extern "C" {
 uint64_t plat_now_ns(void);
+int plat_is_tablet(void);
 extern volatile uint64_t g_town_ns;  // (hle/quickhunt.c: a town's walking-around update)
 int weapon_drawn(void);  // (hle/weapon.c: 1 the weapon out, 0 sheathed, -1 not known)
 #include "hle/input.h"
@@ -213,6 +214,13 @@ const float BAND_LEN = BAND_LEFT + PI * .5f + BAND_UP;
 const float BAND_GUARD = .30f, BAND_SEAM0 = .63f, BAND_SEAM1 = .69f;
 const float KNOB = .45f;             // the stick's knob, in its base's radius
 const float CAMERA_COUNTS = 1150.0f; // mouse counts for a drag the screen's height (hle/mousecam.c: 0.08 degrees each)
+// The sizes are fractions of the screen's height, tuned on a phone. A tablet's screen is physically bigger at about
+// half the pixel density, so they come out huge in the hand there: an iPad draws them at 60% (the layout editor can
+// still size each one, and its saved file wins).
+float size_k(void) {
+    static float k = plat_is_tablet() ? .6f : 1.0f;
+    return k;
+}
 const uint64_t MS = 1000000ull;
 // a Hunter Art's row: its button
 // (the game's default controls: the d-pad - its icon beside each art is a d-pad with that arm marked: up, right, down)
@@ -290,24 +298,24 @@ Geo place(const Layout &l, int i, float w, float h) {
     if (i == C_DPAD || i == C_MINUS) {  // (the d-pad where the stick is, Minus where the map is)
         int at = i == C_DPAD ? C_STICK : C_MAP;
         Geo g = place(l, at, w, h);
-        float r = d.r * l.scale[at] * h;
+        float r = d.r * l.scale[at] * h * size_k();
         if (i == C_DPAD) g.c.x = std::max(g.c.x, r * 1.08f), g.c.y = std::min(g.c.y, h - r * 1.08f);  // (larger than the
         return {g.c, r};                                                                               // stick: on the screen)
     }
     if (i == C_CORNER) {  // (c: the centre of its bend; a larger band stays against the edges)
-        float r = d.r * l.scale[i] * h, in = r * (1 + BAND_T);
+        float r = d.r * l.scale[i] * h * size_k(), in = r * (1 + BAND_T);
         return {ImVec2(w - l.x[i] * h - in, h - l.y[i] * h - in), r};
     }
     if (i == C_MPILL) return place(l, C_ATTACK, w, h);  // (the thumb stays where the attacks are)
     if (i == C_FX || i == C_FY || i == C_ML || i == C_MR) {  // round the pill, where dodge and guard are in a hunt, and
         Geo g = place(l, C_ATTACK, w, h);                     // tabs above it, below the game's windows at the top right
-        float k = l.scale[C_ATTACK], r = d.r * k * h;
+        float k = l.scale[C_ATTACK], r = d.r * k * h * size_k();
         int n = i == C_FX ? 0 : i == C_FY ? 1 : i == C_ML ? 2 : 3;
         static const float ox[4] = {.155f, -.25f, -.215f, .16f}, oy[4] = {.15f, .175f, -.13f, -.25f};
         float mx = n >= 2 ? r * 1.8f : r * 1.1f, my = r * 1.1f;  // (a pill moved to an edge: they stay on the screen)
         return {ImVec2(std::clamp(g.c.x + ox[n] * k * h, mx, w - mx), std::clamp(g.c.y + oy[n] * k * h, my, h - my)), r};
     }
-    return {ImVec2(d.right ? w - l.x[i] * h : l.x[i] * h, h - l.y[i] * h), d.r * l.scale[i] * h};
+    return {ImVec2(d.right ? w - l.x[i] * h : l.x[i] * h, h - l.y[i] * h), d.r * l.scale[i] * h * size_k()};
 }
 
 // the d-pad's direction under a finger, from its centre: one at a time (a menu's cursor goes one way: a thumb between
@@ -622,7 +630,7 @@ bool in_stick_zone(const State &s, float x, float y, const Rect &item) {
 void stick_to(State &s, float x, float y) {  // (the knob under the thumb, kept inside the rim)
     s.fx = x, s.fy = y;
     float dx = x - s.bx, dy = y - s.by, d = sqrtf(dx * dx + dy * dy);
-    float r = DEFS[C_STICK].r * s.layout.scale[C_STICK] * s.h;
+    float r = DEFS[C_STICK].r * s.layout.scale[C_STICK] * s.h * size_k();
     if (d > r) x = s.bx + dx / d * r, y = s.by + dy / d * r;
     s.kx = x, s.ky = y;
 }
@@ -1073,7 +1081,7 @@ extern "C" void touch_input(bool pad_connected, bool typing, uint64_t *buttons, 
         s.assist_wait = s.fired = false, s.assist_until = 0;
     }
     if (s.menu) {  // the stick moves the cursor: the d-pad's direction, one at a time, held while it is tilted
-        float r = DEFS[C_STICK].r * s.layout.scale[C_STICK] * s.h;
+        float r = DEFS[C_STICK].r * s.layout.scale[C_STICK] * s.h * size_k();
         int part = s.stick_on && s.h > 0 ? dpad_part({ImVec2(s.bx, s.by), r * 1.7f}, s.kx, s.ky, s.stick_part) : 0;
         if (part && part != s.stick_part) tap_due();
         s.stick_part = part;
@@ -1083,7 +1091,7 @@ extern "C" void touch_input(bool pad_connected, bool typing, uint64_t *buttons, 
     s.stick_part = 0;
     bool moving = false;
     if (s.stick_on && s.h > 0) {
-        float r = DEFS[C_STICK].r * s.layout.scale[C_STICK] * s.h;
+        float r = DEFS[C_STICK].r * s.layout.scale[C_STICK] * s.h * size_k();
         float dx = (s.kx - s.bx) / r, dy = -(s.ky - s.by) / r;  // (screen y is down, the stick's up)
         float m = sqrtf(dx * dx + dy * dy);
         // a tiny dead zone (4%), and the first bit of tilt already past the game's own dead zone (about a quarter):
@@ -1107,7 +1115,7 @@ extern "C" void touch_input(bool pad_connected, bool typing, uint64_t *buttons, 
         drawn_was = drawn;
     }
     if (s.stick_on && moving && s.h > 0 && drawn != 1) {
-        float r = DEFS[C_STICK].r * s.layout.scale[C_STICK] * s.h, d = hypotf(s.fx - s.bx, s.fy - s.by);
+        float r = DEFS[C_STICK].r * s.layout.scale[C_STICK] * s.h * size_k(), d = hypotf(s.fx - s.bx, s.fy - s.by);
         static bool was;
         was = d > r * (was ? 1.45f : 1.6f);  // (well past the rim: a thumb at the edge in a fight still walks;
                                              // r is the stick's size in the layout: a bigger stick, farther)

@@ -218,6 +218,8 @@ static int count_files(const char *dir, int depth) {
 }
 int plat_count_files(const char *dir) { return count_files(dir, 0); }
 
+int plat_is_tablet(void) { return 0; }
+
 void plat_error_box(const char *msg) {
     fprintf(stderr, "\n*** %s\n", msg);
     // Best effort, and only when there is a display server to ask. Children are reaped by SIG_IGN, so this can't
