@@ -20,6 +20,7 @@
 #include "hle/input.h"
 
 void backend_init(void);  // (the renderer's device, before the game starts: runtime/nvn)
+void vi_set_paused(bool on);  // [Application] PauseInBackground (runtime/hle/vi.c)
 
 static int launch_argc;
 static char **launch_argv;
