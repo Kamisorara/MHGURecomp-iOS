@@ -2,6 +2,7 @@
 // runtime/host_input.c). g_config keeps what this process started with; these atomics hold the values to read from
 // any thread without a lock, published once at start-up here, and by the settings menu when it saves.
 #include <SDL3/SDL.h>
+#include <stdbool.h>
 #include <string.h>
 
 #include "config.h"
