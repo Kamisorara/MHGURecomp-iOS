@@ -20,10 +20,17 @@
 #define CONFIG_DEFAULT_VALUES                                                                                          \
     DISPLAY_BORDERLESS, 1920, 1080, 0, 0, 60, 1, 1, 1, FACE_POSITION, 39500, "", 1, 1, 1, {{1, 1, 1, 1}, 2}, 1.0f, 0.0f, \
         1.0f, UI_CENTER, 1, 0, SCALE_AUTO, 0, COMBO_LENIENT, TOUCH_AUTO, 1, 1.0f, 0.8f, 1, 1, 1, TOUCH_SHOW_DEFAULT,     \
-        {"", "", "", "", "", ""}, {0, 0, 0, 0, 0, 0}, 0
+        {"", "", "", "", "", ""}, {0, 0, 0, 0, 0, 0}, 0, 1.0f
 
 Config g_config = {CONFIG_DEFAULT_VALUES};
 Config config_defaults(void) { Config c = {CONFIG_DEFAULT_VALUES}; return c; }
+
+// Town NPCs (uLobbyNpc: villages, Hubs) fade in within a distance from the game's table (2500 units, 1800 for some)
+// and out beyond it; tools/gen.py PATCHES hands its square here. [Graphics] DrawDistance scales it, 0 is no limit.
+float npc_fade_dist2(float d2) {
+    float m = config_live_draw_distance();
+    return m > 0 ? d2 * m * m : 1e30f;
+}
 
 // A hunting party's screen layout: what the settings menu edits before saving (runtime/config_store.c takes the
 // snapshot the live getters read). g_config itself keeps what this process started with where a change needs a restart.
@@ -85,6 +92,9 @@ static const char DEFAULT_INI[] =
     "; bars around it; Fill zooms it until the screen is full (a little falls outside at the sides); Stretch\n"
     "; distorts it. Auto: Fill on screens narrower than 16:10 (iPads), Fit elsewhere.\n"
     "ScaleMode = Auto\n"
+    "\n"
+    "; Town NPC draw distance: their fade-in range scales by this, 0 shows them always, up to 10 shrinks it.\n"
+    "DrawDistance = 1.0\n"
     "\n"
     "[Anti-aliasing]\n"
     "; MSAA: Off, 2x, 4x or 8x. Smooths the edges of 3D geometry and of some cut-out leaves and fences; each step\n"
@@ -362,6 +372,9 @@ static void set_key(const char *key, char *val, int line) {
     } else if (!strcmp(k, "fov")) {
         float f = strtof(v, NULL);
         if ((ok = f >= 0.5f && f <= 2.0f)) g_config.fov = f;
+    } else if (!strcmp(k, "drawdistance")) {
+        float f = strtof(v, NULL);
+        if ((ok = f >= 0.0f && f <= 10.0f)) g_config.draw_distance = f;
     } else if (!strcmp(k, "uianchor")) {
         ok = parse_anchor(v, &g_config.ui_anchor);
     } else if (!strcmp(k, "msaa")) {

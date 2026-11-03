@@ -22219,7 +22219,7 @@ L_8c11f8:;
     c->v.f[2] = c->v.f[8] - c->v.f[2];
     c->v.f[0] = c->v.f[6] - c->v.f[0];
     c->v.f[4] = c->v.f[10] - c->v.f[4];
-    c->v.s[8] = LD32(c->r[2]);
+    { extern float npc_fade_dist2(float); c->v.f[8] = npc_fade_dist2(LDF(c->r[2])); }
     c->v.f[2] = c->v.f[2] * c->v.f[2];
     c->v.f[2] = c->v.f[2] + (float)(c->v.f[0] * c->v.f[0]);
     c->v.f[2] = c->v.f[2] + (float)(c->v.f[4] * c->v.f[4]);
@@ -24093,7 +24093,7 @@ L_8c2d9c:;
     c->v.s[0] = LD32(c->r[5]);
     c->v.f[6] = c->v.f[8] * c->v.f[8];
     c->v.f[6] = c->v.f[6] + (float)(c->v.f[2] * c->v.f[2]);
-    c->v.s[8] = LD32(c->r[2]);
+    { extern float npc_fade_dist2(float); c->v.f[8] = npc_fade_dist2(LDF(c->r[2])); }
     c->v.f[6] = c->v.f[6] + (float)(c->v.f[4] * c->v.f[4]);
     vfp_cmp_f(c, c->v.f[6], c->v.f[8]);
     vfp_mrs_flags(c);

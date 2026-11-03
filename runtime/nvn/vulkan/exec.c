@@ -17,6 +17,7 @@
 #include <unistd.h>  // ftruncate (mingw pulls it in through another header; POSIX does not)
 
 #include "../../kernel.h"
+#include "../../touch.h"
 #include "shaders.h"
 #include "vk.h"
 
@@ -484,9 +485,23 @@ static void set_state(_Atomic int *state, int v, uint64_t t_req) {
 // A draw whose program / pipeline is still building waits for it, up to MHGU_PIPE_WAIT_MS per frame in all, rather
 // than being skipped at once: most builds take a few ms (SPIR-V and pipeline caches), so the effect appears in its
 // first frame instead of a few frames later, and a slow (uncached) build costs at most the budget once per frame.
+// at_least_ns: a draw that mustn't be skipped waits that long whatever is left of the budget.
+//
+// The quest photo (Quest Rewards / Reward Box screen): at the clear the game copies the scene into its photo buffer
+// once and never again, so a draw skipped then leaves the photo as whatever the buffer's memory held: black (the R9),
+// or other textures' data (RADV, Steam Deck). The game's request (0xa6f97c, hooked in tools/gen.py) opens a window of
+// PHOTO_FRAMES frames in which every draw waits for its build, up to PHOTO_WAIT_NS: the capture and the scene it copies.
+#define PHOTO_FRAMES 8
+#define PHOTO_WAIT_NS 2000000000ll
+static _Atomic uint64_t photo_until;
+void backend_photo_requested(void) {
+    uint64_t f = vk_frame_counter();
+    if (atomic_exchange(&photo_until, f + PHOTO_FRAMES) < f)
+        LOG("[vk] quest photo requested (frame %llu): draws wait for their shaders until it is taken\n", (unsigned long long)f);
+}
 static int64_t wait_budget_ns;
 static uint64_t wait_frame = ~0ull;
-static bool await_build(_Atomic int *state, void *job) {
+static bool await_build(_Atomic int *state, void *job, int64_t at_least_ns) {
     int s = atomic_load(state);
     if (s) return s == 1;
     promote(&translate_q, job);
@@ -498,9 +513,12 @@ static bool await_build(_Atomic int *state, void *job) {
         if (budget < 0) budget = 0;
     }
     uint64_t f = vk_frame_counter();
+    uint64_t photo = atomic_load(&photo_until);
+    if (photo && f <= photo && at_least_ns < PHOTO_WAIT_NS) at_least_ns = PHOTO_WAIT_NS;
     if (f != wait_frame) wait_frame = f, wait_budget_ns = budget;
-    if (wait_budget_ns <= 0) return false;
-    uint64_t t0 = plat_now_ns(), deadline = t0 + (uint64_t)wait_budget_ns;
+    int64_t allowed = wait_budget_ns > at_least_ns ? wait_budget_ns : at_least_ns;
+    if (allowed <= 0) return false;
+    uint64_t t0 = plat_now_ns(), deadline = t0 + (uint64_t)allowed;
     struct timespec rt;
     clock_gettime(CLOCK_REALTIME, &rt);  // (the condition variable's clock)
     int64_t rt_off = (int64_t)rt.tv_sec * 1000000000ll + rt.tv_nsec - (int64_t)t0;
@@ -685,9 +703,113 @@ void vk_framebuffers_forget_view(VkImageView v) {
 // ================================================================== passes
 static VkFormat pass_color[8], pass_depth;
 static uint32_t pass_ncolor, pass_samples = 1, pass_w, pass_h;
+// [Touch] MoveHUD, while the touch controls show (runtime/touch.cpp), on the game's 1280x720 canvas (cbuf_info):
+//   the status (clock, health, stamina, sharpness, name: layer 103 above y 500) to the screen's left edge
+//   the item bar (layer 103 from y 500: x 992..1238 with its label) to the bottom middle, where a tap uses the item
+//     and a swipe turns the bar
+//   the Hunter Arts panels (layer 100, x 709..957 with their button icons, y 618..708: two rows; a third above them)
+//     to the top right, the target
+//     camera's icons (layer 100 at x 1200, y 42..82) left of them
+#define ITEM_BAR_DX (-475.0f)       // (x 992..1238 -> 517..763: the middle)
+#define ARTS_DX (311.0f)            // (x 709..957 -> 1020..1268, then anchored to the screen's right edge)
+#define ARTS_TOP 41.0f              // the top row's first piece goes to this y (two rows: 631 -> 41; three: the same)
+#define TARGET_DX (-250.0f)         // (x 1200 -> 950, from the right edge: left of the arts)
+
 static bool ui_relax_scissor;  // the draw being set up moved a HUD piece out from under the game's scissor
+static int ui_scissor_v = -1;  // 16:10: the draw being set up is a HUD piece anchored so (0 top, 1 centre, 2 bottom),
+                               // and its scissor moves with it
 static bool ui_menu_pass;  // this pass drew a layer 97 menu before (the windows of layer 100 then sit beside Top-anchored ones)
 static bool ui_loading_pass;  // this pass draws the loading screen (its backdrop, layer 110, came first)
+static bool ui_title_pass;  // this pass draws the title screen (its layout, layer 108 at the canvas centre, came first)
+static bool ui_frontend_pass;  // this pass draws a front-end screen (Main Menu, Character Select: its 16:9 backdrop, layer
+                               // 250 at the canvas centre, came first)
+static bool ui_stamp_pass;  // this pass draws the Quest Complete stamp (its borders, layer 97 at x 640, y 53 / 687, came first)
+static bool ui_results_pass, ui_results_last;  // this pass / the last pass with HUD in it draws the quest results screen
+static bool ui_meownster_pass;  // this pass draws the Meownster Hunters return screen (its map frame, layer 105, came first)
+// The HUD quads this pass drew last (16:9 canvas place, vertical anchor 0 top / 1 centre / 2 bottom, horizontal 0 left /
+// 1 right / 2 centre): a model preview follows the window drawn over it (ui_preview_map)
+#define UI_RECENT 256
+static struct { float x, y; uint8_t vanchor, hanchor; } ui_recent[UI_RECENT];
+static uint32_t ui_nrecent;  // (quads recorded this pass; the slot is the count modulo UI_RECENT)
+
+// 16:10: a window is drawn as pieces (body, edges, corners, then its text), each placed by its own centre, so one rule
+// could send its top edge up and its bottom edge down (the chat window, the shoutout list, the Guild Card greeting).
+// The pieces drawn one after another on one layer, near each other, are a group; when their anchors disagree the whole
+// group takes one, from where it sits: by the nearer edge (top or bottom) or, with about as much room above as below,
+// the centre. Their matrices are still in transient memory (not submitted before the pass ends), so the group is
+// settled when it is complete: at the next piece that doesn't belong to it, a 3D draw (a model preview inside the
+// window follows its anchor) or the end of the pass.
+#define UI_GROUP_MAX 512
+static struct {
+    int n, predict;  // predict: the anchor this group got last frame (ui_group_known), -1 if not seen
+    float z, x0, y0, xmin, xmax, ymin, ymax;
+    uint8_t anchors;  // (bit per vertical anchor among its pieces)
+    struct { float *m, pos_y; uint8_t vanchor; uint32_t recent; } p[UI_GROUP_MAX];
+} ui_group;
+// Each group's final anchor, by its first piece (layer and place): the HUD is drawn the same way every frame, so the
+// scissors of a group's pieces, recorded before the group is complete, take the anchor it got last frame
+#define UI_KNOWN 64
+static struct { float z, x, y; int v; } ui_group_known[UI_KNOWN];
+static uint32_t ui_nknown;
+static int ui_group_lookup(float z, float x, float y) {
+    for (int i = 0; i < UI_KNOWN; i++)
+        if (ui_group_known[i].z == z && ui_group_known[i].x == x && ui_group_known[i].y == y) return ui_group_known[i].v;
+    return -1;
+}
+static void ui_group_remember(int v) {
+    for (int i = 0; i < UI_KNOWN; i++)
+        if (ui_group_known[i].z == ui_group.z && ui_group_known[i].x == ui_group.x0 && ui_group_known[i].y == ui_group.y0) {
+            ui_group_known[i].v = v;
+            return;
+        }
+    int i = (int)(ui_nknown++ % UI_KNOWN);
+    ui_group_known[i].z = ui_group.z, ui_group_known[i].x = ui_group.x0, ui_group_known[i].y = ui_group.y0, ui_group_known[i].v = v;
+}
+// The anchor the group's pieces so far get: their own when they agree, else one from where the group sits (-1: agree)
+static int ui_group_vanchor(void) {
+    bool agree = true;
+    for (int i = 1; i < ui_group.n; i++) agree &= ui_group.p[i].vanchor == ui_group.p[0].vanchor;
+    if (agree) return -1;
+    float above = ui_group.ymin, below = 720.0f - ui_group.ymax;  // (piece centres: the edges and corners lie on the frame)
+    return above < 0.5f * below ? 0 : below < 0.5f * above ? 2 : 1;
+}
+static void ui_group_end(void) {
+    int n = ui_group.n;
+    if (!n) return;
+    int v = n < 2 ? -1 : ui_group_vanchor();
+    ui_group_remember(v >= 0 ? v : ui_group.p[0].vanchor);
+    ui_group.n = 0;
+    if (v < 0) return;
+    float sy = g_render_aspect / (16.0f / 9.0f);
+    for (int i = 0; i < n; i++) {
+        float y = ui_group.p[i].pos_y;
+        ui_group.p[i].m[13] = v == 0 ? y * sy : v == 2 ? 720.0f - (720.0f - y) * sy : 360.0f + (y - 360.0f) * sy;
+        if (ui_nrecent - ui_group.p[i].recent <= UI_RECENT) ui_recent[ui_group.p[i].recent % UI_RECENT].vanchor = (uint8_t)v;
+    }
+}
+static void ui_group_add(float *m, float pos_z, float pos_x, float pos_y, int vanchor) {
+    // Not near: more than 400 above or below (a frame drawn as its corners only, the help windows' 336 high, is one group;
+    // the target cam at y 42..82 and the Hunter Arts prompts below y 600 are two), or a piece of another anchor beside the
+    // group both sideways and vertically (the Guild Card's page counter, top right, next to its page; a window's own
+    // pieces line up with the rest of it on one side: its other corner, its bottom edge)
+    const float margin = 24.0f;
+    bool apart = !(ui_group.anchors & (1u << vanchor)) && (pos_x < ui_group.xmin - margin || pos_x > ui_group.xmax + margin) &&
+                 (pos_y < ui_group.ymin - margin || pos_y > ui_group.ymax + margin);
+    if (ui_group.n && (fabsf(pos_z - ui_group.z) > 0.5f || pos_y < ui_group.ymin - 400.0f || pos_y > ui_group.ymax + 400.0f ||
+                       apart || ui_group.n == UI_GROUP_MAX))
+        ui_group_end();
+    if (!ui_group.n) {
+        ui_group.z = pos_z, ui_group.x0 = ui_group.xmin = ui_group.xmax = pos_x, ui_group.y0 = ui_group.ymin = ui_group.ymax = pos_y;
+        ui_group.anchors = 0;
+        ui_group.predict = ui_group_lookup(pos_z, pos_x, pos_y);
+    }
+    ui_group.xmin = fminf(ui_group.xmin, pos_x), ui_group.xmax = fmaxf(ui_group.xmax, pos_x);
+    ui_group.ymin = fminf(ui_group.ymin, pos_y), ui_group.ymax = fmaxf(ui_group.ymax, pos_y);
+    ui_group.anchors |= (uint8_t)(1u << vanchor);
+    ui_group.p[ui_group.n].m = m, ui_group.p[ui_group.n].pos_y = pos_y, ui_group.p[ui_group.n].vanchor = (uint8_t)vanchor;
+    ui_group.p[ui_group.n].recent = ui_nrecent - 1;  // (cbuf_info recorded it just before)
+    ui_group.n++;
+}
 static VkRenderPass pass_rp;
 
 // Redundant-state filter: what draw() last set in the current command buffer (forgotten whenever something else may
@@ -878,6 +1000,8 @@ static uint32_t pass_natt;
 
 void vk_end_pass(void) {
     if (!in_pass) return;
+    ui_group_end();
+    if (ui_nrecent) ui_results_last = ui_results_pass;
     vkCmdEndRenderPass(vk_cmd());
     in_pass = false;
     if (gp_active) {
@@ -1118,7 +1242,13 @@ static void begin_pass(void) {
     if (minw == UINT32_MAX) minw = minh = 16;
     pass_w = minw; pass_h = minh;
     ui_loading_pass = false;
+    ui_title_pass = false;
+    ui_frontend_pass = false;
+    ui_stamp_pass = false;
+    ui_results_pass = false;
+    ui_meownster_pass = false;
     ui_menu_pass = false;
+    ui_nrecent = 0;
     pass_msaa = false;
     if (ms_ok && pass_depth != VK_FORMAT_UNDEFINED && minw == g_render_size[0] && minh == g_render_size[1]) {
         bool stencil = pass_depth == VK_FORMAT_D24_UNORM_S8_UINT || pass_depth == VK_FORMAT_D32_SFLOAT_S8_UINT;
@@ -1191,12 +1321,90 @@ static void pass_size(int *w, int *h) {
 
 volatile int g_shadow_scissor_mode;  // (debug, F8 in host_input.c) depth-only passes: 0 as set, 1 none, 2 mirrored in the viewport
 
+// The pass's size as the guest sees it: its viewport and scissor
+static void pass_guest_size(float *w, float *h) { *w = (float)pass_w, *h = (float)pass_h; }
+
+// A 3D model shown inside a HUD window (the Smithy's weapon / armor preview, the equipment screens) is drawn through a
+// viewport and scissor the game sized for its 1280x720 canvas, spread over the whole picture. The window itself is moved
+// and squeezed by cbuf_info (the same anchoring), so the model would stay where the window was before it moved and spill
+// past its frame: on a picture wider than 16:9 sideways, on a narrower one (16:10) up or down. x' = sx + x * kx (and
+// likewise y) puts the rectangle where the window went: sideways left / right / centre by where it is, vertically as the
+// window's frame (the last HUD quad drawn over the viewport, ui_recent) was anchored. The scissor follows it exactly; the
+// viewport keeps its size and only its centre moves (the game's projection is made for that shape; squeezing it squeezes
+// the model).
+// Returns false when the draw is not such a rectangle.
+typedef struct { float sx, kx, sy, ky; } PreviewMap;
+static bool ui_preview_map(PreviewMap *pm) {
+    float asp = g_render_aspect, pw, ph;
+    pass_guest_size(&pw, &ph);
+    if (fabsf(asp - 16.0f / 9.0f) <= 0.01f || !st.ds[0] || !pass_w || ph != (float)g_render_size[1]) return false;
+    ui_group_end();  // (the window drawn before it is complete: its anchor is the one to follow)
+    const float *vp = st.viewport[0];
+    float w = vp[2], h = fabsf(vp[3]);
+    if (w < 8.0f || w > 0.9f * pw || h > 0.98f * ph) return false;  // (the scene itself: the whole picture)
+    *pm = (PreviewMap){0, 1, 0, 1};
+    // The window it is drawn in: the last quad over the viewport (inside it sideways, not below it). The last quad of all
+    // can be a button prompt under the window ("Rotate" under the Palico Scout preview), anchored apart from it.
+    int vanchor = ui_nrecent ? ui_recent[(ui_nrecent - 1) % UI_RECENT].vanchor : 1, hanchor = -1;
+    {
+        float x0 = vp[0] / pw * 1280.0f, x1 = (vp[0] + w) / pw * 1280.0f, y1 = (fminf(vp[1], vp[1] + vp[3]) + h) / ph * 720.0f;
+        for (uint32_t i = ui_nrecent; i > 0 && ui_nrecent - i < UI_RECENT; i--) {
+            uint32_t k = (i - 1) % UI_RECENT;
+            if (ui_recent[k].x >= x0 && ui_recent[k].x <= x1 && ui_recent[k].y <= y1) {
+                vanchor = ui_recent[k].vanchor, hanchor = ui_recent[k].hanchor;
+                break;
+            }
+        }
+    }
+    if (asp > 16.0f / 9.0f) {
+        float s = (16.0f / 9.0f) / asp;
+        float ui = ui_frontend_pass ? 16.0f / 9.0f : g_ui_anchor_aspect;  // (front-end screens: as their HUD, cbuf_info)
+        float anchor = ui < asp ? ui : asp;
+        float left_px = 640.0f * (1.0f - anchor / asp) * (pw / 1280.0f);
+        float cx = (vp[0] + w * 0.5f) / pw * 1280.0f;
+        // sideways as its window went (the smithy's parchment, layer 100, goes Right: by its own place the model went
+        // Left, out of it), or by where it is when no window is over it
+        if (hanchor < 0) hanchor = cx <= 430.0f ? 0 : cx >= 650.0f ? 1 : 2;
+        pm->kx = s;
+        if (hanchor == 0) pm->sx = left_px;
+        else if (hanchor == 1) pm->sx = pw - left_px - pw * s;
+        else pm->sx = pw * 0.5f * (1.0f - s);
+    } else {
+        float sy = asp / (16.0f / 9.0f);
+        pm->ky = sy;
+        if (vanchor == 0) pm->sy = 0;
+        else if (vanchor == 2) pm->sy = ph * (1.0f - sy);
+        else pm->sy = ph * 0.5f * (1.0f - sy);
+    }
+    return true;
+}
+
 static VkRect2D scissor_rect(void) {
     int w, h;
     pass_size(&w, &h);
     if (!w) return (VkRect2D){{0, 0}, {pass_w, pass_h}};
     int x = st.scissor[0][0], y = st.scissor[0][1], sw = st.scissor[0][2], sh = st.scissor[0][3];
     if (ui_relax_scissor) { x = y = 0; sw = w; sh = h; }
+    if (ui_scissor_v >= 0 && !ui_relax_scissor) {  // (16:10: a HUD piece's scissor moves with it, unless it is the whole pass)
+        float pw, ph;
+        pass_guest_size(&pw, &ph);
+        if (x > 0 || y > 0 || sw < (int)pw || sh < (int)ph) {
+            float sy = g_render_aspect / (16.0f / 9.0f), y0 = (float)y, y1 = (float)(y + sh);
+            float off = ui_scissor_v == 0 ? 0.0f : ui_scissor_v == 2 ? ph * (1.0f - sy) : ph * 0.5f * (1.0f - sy);
+            y = (int)floorf(off + y0 * sy);
+            sh = (int)ceilf(off + y1 * sy) - y;
+        }
+    }
+    {
+        PreviewMap pm;
+        if (!ui_relax_scissor && ui_preview_map(&pm)) {
+            float x0 = pm.sx + x * pm.kx, x1 = pm.sx + (x + sw) * pm.kx, y0 = pm.sy + y * pm.ky, y1 = pm.sy + (y + sh) * pm.ky;
+            x = (int)lroundf(x0);
+            sw = (int)lroundf(x1 - x0);
+            y = (int)lroundf(y0);
+            sh = (int)lroundf(y1 - y0);
+        }
+    }
     if (!st.rt.ncolor && g_shadow_scissor_mode == 1) { x = (int)st.viewport[0][0]; y = (int)st.viewport[0][1]; sw = (int)st.viewport[0][2]; sh = (int)st.viewport[0][3]; }
     if (!st.rt.ncolor && g_shadow_scissor_mode == 2) y = 2 * (int)st.viewport[0][1] + (int)st.viewport[0][3] - y - sh;
     if (x < 0) { sw += x; x = 0; }
@@ -2136,8 +2344,9 @@ static VkDescriptorBufferInfo cbuf_info(int stage, ShaderInfo *si, int k, uint32
     if (size > r.size && r.size) size = r.size;
     if (size < 16) size = 16;
     if (!guest_range_ok(r.addr, size)) return zero_buffer(size);
-    if (stage == 0 && k == 3) ui_relax_scissor = false;
-    if (stage == 0 && k == 3 && !st.ds[0] && pass_h == g_render_size[1] && fabsf(g_render_aspect - 16.0f / 9.0f) > 0.01f) {
+    if (stage == 0 && k == 3) ui_relax_scissor = false, ui_scissor_v = -1;
+    if (stage == 0 && k == 3 && !st.ds[0] && pass_h == g_render_size[1] &&
+        (fabsf(g_render_aspect - 16.0f / 9.0f) > 0.01f || touch_visible())) {  // (touch controls: their HUD parts at 16:9 too)
         if (size >= 64) {
             float m[16];
             memcpy(m, G2H((uint32_t)r.addr), 64);
@@ -2156,13 +2365,27 @@ static VkDescriptorBufferInfo cbuf_info(int stage, ShaderInfo *si, int k, uint32
                 // Layer 110 is the loading screen's scrolling backdrop: strips at y 168 / 433 / 570 that must stay one picture.
                 // The generic rule anchored each strip to a different edge and flattened it, leaving gaps between them.
                 // They keep their height (as on a stretched 16:9 canvas), so nothing moves vertically.
+                bool loading_strip = false;
                 if (fabsf(pos_z - 110.0f) < 0.5f) {
                     sy = 1.0f;
                     // (only the strips: the lock-on markers and other effects use layer 110 too, mid-hunt, and made
                     // everything after them center-anchored, so the HUD jumped down)
-                    if (fabsf(pos_y - 168.0f) < 0.3f || fabsf(pos_y - 433.0f) < 0.3f || fabsf(pos_y - 570.0f) < 0.3f) ui_loading_pass = true;
+                    loading_strip = fabsf(pos_y - 168.0f) < 0.3f || fabsf(pos_y - 433.0f) < 0.3f || fabsf(pos_y - 570.0f) < 0.3f;
+                    if (loading_strip) ui_loading_pass = true;
                 }
-                float anchor_aspect = g_ui_anchor_aspect;  // (config.c: 16:9 .. the screen's)
+                // Front-end screens keep their backdrop 16:9: the HUD stays on it as with the 16:9 anchor. Edges / 21:9 / 32:9
+                // took their centred menus (layer 100, x 640, anchored Right) and the help box (96) off it, to the sides.
+                bool backdrop = fabsf(pos_z - 250.0f) < 0.5f && fabsf(pos_x - 640.0f) < 0.5f && fabsf(pos_y - 360.0f) < 0.5f;
+                if (backdrop) {
+                    ui_frontend_pass = true;
+                    // (the front-end's screens: the title, the main menu, the character select and creation are menus
+                    // too, driven with the d-pad and A / B: the touch controls' menu layout)
+                    touch_hud_menu();
+                }
+                // [Display] ScaleMode Fill: the backdrop itself covers the wider screen, in its shape (cut above and below)
+                bool backdrop_fill = backdrop && g_config.scale_mode == SCALE_FILL && s < 1.0f;
+                bool backdrop_tall = backdrop && g_config.scale_mode == SCALE_FILL && sy < 1.0f;  // (narrower: as high as the screen, cut at the sides)
+                float anchor_aspect = ui_frontend_pass ? 16.0f / 9.0f : g_ui_anchor_aspect;  // (config.c: 16:9 .. the screen's)
                 if (anchor_aspect > g_render_aspect) anchor_aspect = g_render_aspect;
                 float a_ratio = anchor_aspect / g_render_aspect;
                 float anchor_left = 640.0f * (1.0f - a_ratio);
@@ -2170,13 +2393,28 @@ static VkDescriptorBufferInfo cbuf_info(int stage, ShaderInfo *si, int k, uint32
 
                 bool is_3d_overlay = (pos_z > 180.0f);
                 float new_pos_x = pos_x, new_pos_y = pos_y;
+                bool item_bar_move = false, arts_move = false, target_move = false, status_edge = false;
+                // the hunt's HUD (not a menu, the results, a loading screen, the title): its item bar, Hunter Arts and
+                // target camera answer a finger (runtime/touch.cpp), moved or not; with the touch controls they move
+                bool hunt_hud = !ui_menu_pass && !ui_results_pass && !ui_results_last && !ui_loading_pass && !ui_title_pass &&
+                                !ui_meownster_pass;
+                bool item_bar_part = false, arts_part = false, target_part = false;
+                bool grouped = false;
+                int vgroup = 1;
 
                 if (!is_3d_overlay) {
                     enum { ANCHOR_LEFT, ANCHOR_RIGHT, ANCHOR_CENTER } anchor = ANCHOR_CENTER;
                     // vertically one anchor per layer (or per part of one), so a window drawn in pieces stays together
                     enum { V_TOP, V_BOTTOM, V_CENTER } vanchor = V_CENTER;
 
-                    if (ui_loading_pass && pos_z >= 94.0f && pos_z < 109.5f) {
+                    // Title screen: its layout (layer 108) is placed at the canvas centre and carries the copyright line at
+                    // its bottom (y ~698), which the centre anchor moved up into "PRESS A" (layer 100, y 653 / 671, bottom
+                    // anchor). Both scale about the centre, so they keep their spacing.
+                    if (fabsf(pos_z - 108.0f) < 0.5f && fabsf(pos_x - 640.0f) < 0.5f && fabsf(pos_y - 360.0f) < 0.5f) ui_title_pass = true;
+                    if (ui_title_pass && fabsf(pos_z - 100.0f) < 0.5f) {
+                        anchor = ANCHOR_CENTER;
+                        vanchor = V_CENTER;
+                    } else if (ui_loading_pass && pos_z >= 94.0f && pos_z < 109.5f) {
                         // Loading screen: the quest panel's headers (layer 100), its text (101) and the title (105) are one
                         // picture. The generic rules moved them by different amounts (bottom, center, top) and the
                         // "Summary" header landed on the text. All of it scales about the center instead.
@@ -2184,11 +2422,14 @@ static VkDescriptorBufferInfo cbuf_info(int stage, ShaderInfo *si, int k, uint32
                         vanchor = V_CENTER;
                     } else if (pos_z < 95.0f) {
                         // 94.0: Central notifications & banners ("Time limit: 50 min.")
+                        // 60.0: the Guild Card's name plate (top right, under its page counter): by which third it is in
                         anchor = ANCHOR_CENTER;
+                        vanchor = pos_y < 240.0f ? V_TOP : pos_y > 480.0f ? V_BOTTOM : V_CENTER;
                     } else if (fabsf(pos_z - 96.0f) < 0.5f) {
-                        // 96.0: Dialogue & Help text box (bottom left)
-                        anchor = ANCHOR_LEFT;
-                        vanchor = V_BOTTOM;
+                        // 96.0: Dialogue & Help text box (bottom left), and the button guides of the village / Hub (top
+                        // left and right)
+                        anchor = pos_x >= 650.0f ? ANCHOR_RIGHT : ANCHOR_LEFT;
+                        vanchor = pos_y < 360.0f ? V_TOP : V_BOTTOM;
                     } else if (fabsf(pos_z - 97.0f) < 0.5f || fabsf(pos_z - 98.0f) < 0.5f) {
                         // 97.0: Menus and Submenus
                         // 98.0: text drawn over them (the Qty. label of the quantity box): it used the generic rule, which
@@ -2202,8 +2443,22 @@ static VkDescriptorBufferInfo cbuf_info(int stage, ShaderInfo *si, int k, uint32
                         }
                         // The Quest Complete banner's lower border slides in from y 739: it belongs to the bottom edge.
                         vanchor = pos_y > 650.0f ? V_BOTTOM : V_TOP;
-                        if (fabsf(pos_z - 97.0f) < 0.5f) ui_menu_pass = true;
+                        // The Quest Complete stamp is one picture, after its borders (x 640, by the top and bottom edges; the
+                        // lower one slides in from y 739). Right / Left by place split it on a wide picture, its tilted
+                        // "QUEST" (x -17) left of the rest.
+                        if (fabsf(pos_z - 97.0f) < 0.5f && fabsf(pos_x - 640.0f) < 0.5f && (pos_y < 60.0f || pos_y > 680.0f))
+                            ui_stamp_pass = true;
+                        if (fabsf(pos_z - 97.0f) < 0.5f) {
+                            ui_menu_pass = true;
+                            // (a menu of the game's is open: the touch controls' menu layout; not the field's Quest
+                            // Complete banner, drawn on this layer too)
+                            if (!ui_stamp_pass) touch_hud_menu();
+                        }
+                        if (ui_stamp_pass) anchor = ANCHOR_CENTER;
                     } else if (fabsf(pos_z - 100.0f) < 0.5f) {
+                        // (a window on this layer, the multiplayer menu or the hub's form: a stretched panel, which the
+                        // HUD's parts here never are, in a hunt: the touch controls' menu layout)
+                        if (fabsf(m[0]) > 2.0f && fabsf(m[5]) > 2.0f) touch_hud_menu();
                         // 100.0: Hunter Arts HUD and bottom right prompts (y > 600) -> Bottom anchor
                         // Target cam selector (right edge, y 42..82: x > 1000, y < 360) -> Top anchor, so it stays by the minimap.
                         // (Windows centered on this layer, x 640, must stay one piece: they keep the Bottom anchor.)
@@ -2213,18 +2468,36 @@ static VkDescriptorBufferInfo cbuf_info(int stage, ShaderInfo *si, int k, uint32
                         // of layer 97: one anchor for the whole window, or it splits. Without a menu in the pass (the results screen, whose
                         // labels on the left and numbers on the right are one table) they stay Bottom like the rest of the layer.
                         vanchor = ((pos_x > 1000.0f && pos_y < 360.0f) || pos_y < 10.0f || (ui_menu_pass && pos_x < 630.0f && pos_y < 560.0f)) ? V_TOP : V_BOTTOM;
+                        // Touch controls (runtime/touch.cpp): the hunt's Hunter Arts panels (x 726..842, y 560..720: up
+                        // to three rows) to the top right, the target camera's icons (x 1200, y < 100) left of them
+                        if (hunt_hud && pos_x >= 700.0f && pos_x <= 900.0f && pos_y > 560.0f) {
+                            arts_part = true;
+                            if (g_touch_hud) vanchor = V_TOP, arts_move = true;
+                        } else if (hunt_hud && fabsf(pos_x - 1200.0f) < 1.0f && pos_y < 100.0f) {
+                            target_part = true;
+                            target_move = g_touch_hud != 0;
+                        }
                     } else if (fabsf(pos_z - 103.0f) < 0.5f) {
                         // 103.0: In-hunt Status HUD & Item Selector
                         // Status HUD (Clock, HP bar, Stamina, gauges, palico status: y < 500) -> Left anchor
-                        // Item Selector wheel (y >= 500) -> Right anchor
-                        if (pos_y < 500.0f) {
+                        // Item Selector wheel (y >= 500) -> Right anchor, and the ammo or coating list that opens above it
+                        // (x 970..1242, y 392..464, L held), which must stay with its plates below
+                        if (pos_y < 500.0f && !(pos_x > 900.0f && pos_y > 330.0f)) {
                             anchor = ANCHOR_LEFT;
                             vanchor = V_TOP;
+                            status_edge = g_touch_hud && hunt_hud;  // (touch controls: at the screen's left edge)
                         } else {
                             anchor = ANCHOR_RIGHT;
                             vanchor = V_BOTTOM;
                             // the item bar is drawn through a scissor sized for the original layout; it cut the moved bar
-                            ui_relax_scissor = true;
+                            ui_relax_scissor = s < 1.0f || sy < 1.0f || (g_touch_hud && hunt_hud);
+                            // Touch controls on the screen (runtime/touch.cpp): the bar goes to the bottom middle, out of
+                            // the right thumb's buttons, where a tap on it uses the item and a swipe turns it
+                            item_bar_part = hunt_hud && pos_y >= 500.0f;
+                            if (g_touch_hud && hunt_hud) {
+                                anchor = ANCHOR_CENTER;
+                                item_bar_move = true;
+                            }
                         }
                     } else if (fabsf(pos_z - 105.0f) < 0.5f) {
                         // 105.0: Minimap & Target Cam
@@ -2241,25 +2514,99 @@ static VkDescriptorBufferInfo cbuf_info(int stage, ShaderInfo *si, int k, uint32
                         if (fabsf(pos_z - 99.0f) < 0.5f && vanchor == V_CENTER) vanchor = V_BOTTOM;
                     }
 
-                    if (anchor == ANCHOR_LEFT) {
+                    // Quest results screen: its header and page counter at the top, the Time Left bar at the bottom (layer
+                    // 99, its ends at x 80 / 1180, y 643: what marks the screen), and in the middle the Quest Complete
+                    // stamp, the reward table, the item lists' parchment (101), its lines (99) and rows (100). The layers'
+                    // rules sent those different ways (the rows top, the parchment centre: the first row sat above the
+                    // parchment, the header went down). The bar is drawn after the stamp, so the last pass also tells.
+                    if (fabsf(pos_z - 99.0f) < 0.5f && fabsf(pos_y - 643.0f) < 0.5f && (fabsf(pos_x - 80.0f) < 0.5f || fabsf(pos_x - 1180.0f) < 0.5f))
+                        ui_results_pass = true;
+                    // Sideways the middle is one table, centred (layer 100's Right took it right of the stamp it sits on, with
+                    // Edges / 21:9), and the header and page counter go to their side.
+                    if ((ui_results_pass || ui_results_last) && pos_z > 98.5f && pos_z < 101.5f) {
+                        vanchor = pos_y < 60.0f ? V_TOP : pos_y > 600.0f ? V_BOTTOM : V_CENTER;
+                        if (vanchor == V_CENTER) anchor = ANCHOR_CENTER;
+                        else if (vanchor == V_TOP) anchor = pos_x <= 430.0f ? ANCHOR_LEFT : pos_x >= 650.0f ? ANCHOR_RIGHT : ANCHOR_CENTER;
+                    }
+                    // Meownster Hunters return screen: a map in a black frame at the top (the frame on layers 105 and 100,
+                    // its corner at 215, 0; the map 105; its icons 102 / 103, bubbles 98), the Palicoes' tokens and the
+                    // reward list over it (100), the Reward List header and the prompts at the bottom. Layer 100 went to the
+                    // bottom with its rule: the tokens sat too low on the map, the lead Palico below the frame, and the
+                    // frame's lower edge slid away from it. All of it but the header and prompts (below y 600) goes top.
+                    if (fabsf(pos_z - 105.0f) < 0.5f && pos_x == 215.0f && pos_y == 0.0f) ui_meownster_pass = true;
+                    if (ui_meownster_pass && pos_z > 97.5f && pos_z < 105.5f) vanchor = pos_y > 600.0f ? V_BOTTOM : V_TOP;
+                    // The loading backdrop's tiles (x -30, 549, 1128...: one every 579, past 1280) are one picture sideways
+                    // too, from the screen's left edge: by place they went Left / Centre / Right, three copies with gaps
+                    // between them with Edges / 21:9; centred (or Center), nothing covered the left of the first tile.
+                    if (loading_strip) {
+                        new_pos_x = pos_x * s;
+                    } else if (anchor == ANCHOR_LEFT) {
                         new_pos_x = anchor_left + pos_x * s;
                     } else if (anchor == ANCHOR_RIGHT) {
                         new_pos_x = anchor_right - (1280.0f - pos_x) * s;
                     } else {
                         new_pos_x = 640.0f + (pos_x - 640.0f) * s;
                     }
-                    if (vanchor == V_TOP) new_pos_y = pos_y * sy;
+                    if (status_edge) new_pos_x = pos_x * s;
+                    // (each moved part where the player put it in the touch layout editor, runtime/touch.cpp)
+                    if (item_bar_move) new_pos_x += (ITEM_BAR_DX + g_touch_zone_dx[TZ_ITEM]) * s;
+                    if (arts_move) new_pos_x = 1280.0f - (1280.0f - (pos_x + ARTS_DX + g_touch_zone_dx[TZ_ARTS])) * s;
+                    if (target_move) new_pos_x = 1280.0f - (1280.0f - (pos_x + TARGET_DX + g_touch_zone_dx[TZ_TARGET])) * s;
+                    int v = vanchor == V_TOP ? 0 : vanchor == V_BOTTOM ? 2 : 1;
+                    ui_recent[ui_nrecent % UI_RECENT].x = pos_x, ui_recent[ui_nrecent % UI_RECENT].y = pos_y;
+                    ui_recent[ui_nrecent % UI_RECENT].vanchor = (uint8_t)v;
+                    ui_recent[ui_nrecent % UI_RECENT].hanchor = (uint8_t)anchor;
+                    ui_nrecent++;
+                    if (arts_move) {
+                        static uint64_t arts_frame;
+                        static float arts_top = 631.0f, arts_top_now = 1e9f;
+                        if (g_present_count != arts_frame) {
+                            if (arts_top_now < 1e9f) arts_top = arts_top_now;
+                            arts_top_now = 1e9f, arts_frame = g_present_count;
+                        }
+                        if (pos_y < arts_top_now) arts_top_now = pos_y;
+                        new_pos_y = (pos_y - fminf(arts_top, arts_top_now) + ARTS_TOP) * sy;
+                    }
+                    else if (vanchor == V_TOP) new_pos_y = pos_y * sy;
                     else if (vanchor == V_BOTTOM) new_pos_y = 720.0f - (720.0f - pos_y) * sy;
                     else new_pos_y = 360.0f + (pos_y - 360.0f) * sy;
+                    if (item_bar_move) new_pos_y += g_touch_zone_dy[TZ_ITEM] * sy;
+                    if (arts_move) new_pos_y += g_touch_zone_dy[TZ_ARTS] * sy;
+                    if (target_move) new_pos_y += g_touch_zone_dy[TZ_TARGET] * sy;
+                    if (item_bar_part) touch_hud_piece(TZ_ITEM, pos_x, pos_y, new_pos_x, new_pos_y);
+                    if (arts_part) touch_hud_piece(TZ_ARTS, pos_x, pos_y, new_pos_x, new_pos_y);
+                    if (target_part) touch_hud_piece(TZ_TARGET, pos_x, pos_y, new_pos_x, new_pos_y);
+                    // One anchor per window (ui_group_end), on a picture narrower than 16:9. Not for the hunt's status HUD
+                    // and item bar (103), the minimap (105), the loading screen, or the bars that belong to an edge (a
+                    // cinematic's at y 0 / 720, the Quest Complete border sliding in from y 739).
+                    grouped = sy < 1.0f && !(ui_loading_pass && pos_z >= 94.0f && pos_z < 109.5f) && fabsf(pos_z - 103.0f) >= 0.5f &&
+                              fabsf(pos_z - 105.0f) >= 0.5f && pos_y >= 10.0f && pos_y <= 712.0f && !arts_move && !target_move;
+                    vgroup = v;
                 }
 
-                m[0] *= s; m[4] *= s; m[8] *= s;
-                m[1] *= sy; m[5] *= sy; m[9] *= sy;
+                if (backdrop_fill) {
+                    float k = 1.0f / s;
+                    m[1] *= k; m[5] *= k; m[9] *= k;
+                } else if (backdrop_tall) {
+                    float k = 1.0f / sy;
+                    m[0] *= k; m[4] *= k; m[8] *= k;
+                } else {
+                    m[0] *= s; m[4] *= s; m[8] *= s;
+                }
+                if (!backdrop_tall) { m[1] *= sy; m[5] *= sy; m[9] *= sy; }
                 m[12] = new_pos_x;
                 m[13] = new_pos_y;
 
                 VkSpan sp = vk_transient_copy(G2H((uint32_t)r.addr), size, 256);  // (all of it, the matrix changed)
                 memcpy(sp.ptr, m, 64);
+                if (grouped) ui_group_add((float *)sp.ptr, pos_z, pos_x, pos_y, vgroup);
+                // The game clips some windows (a list, the help windows' body) with a scissor laid out for the 16:9 window:
+                // it moves with the piece, as its group was anchored last frame (the group is not complete yet), or for a
+                // group not seen before as the pieces so far are.
+                if (sy < 1.0f && !is_3d_overlay) {
+                    int gv = !grouped ? -1 : ui_group.predict >= 0 ? ui_group.predict : ui_group_vanchor();
+                    ui_scissor_v = gv >= 0 ? gv : vgroup;
+                }
                 return ubo_span(sp, size);
             }
         }
@@ -2396,7 +2743,7 @@ static void dispatch_compute(uint32_t gx, uint32_t gy, uint32_t gz) {
     if (!st.program || !gx || !gy || !gz) return;
     CsProg *cp = compute_program(st.program);
     if (!cp) { stat_skipped++; return; }
-    if (!await_build(&cp->p.state, cp)) { skip_draw(&stat_skip_pipe); return; }
+    if (!await_build(&cp->p.state, cp, 0)) { skip_draw(&stat_skip_pipe); return; }
     vk_end_pass();
     st.rt_dirty = true;
     ms_resolve_sampled(5, cp->si);
@@ -2462,6 +2809,41 @@ static bool fxaa_skipped(Prog *pr) {
     return true;
 }
 
+// A movie frame: the game draws the decoder's NV12 planes (hle/movie.c), an R8 picture and its half-size RG8 colour.
+// Its picture (NULL: not a movie frame).
+static NvnTexture *movie_picture(Prog *pr) {
+    NvnTexture *y = NULL, *uv = NULL;
+    for (int i = 0; i < pr->fi->ntex; i++) {
+        NvnTexture *t = shader_texture_object(1, &pr->fi->tex[i]);
+        if (t && t->format == 0x1) y = t;        // R8
+        else if (t && t->format == 0xd) uv = t;  // RG8
+    }
+    if (!y || !uv || uv->width * 2 != y->width || uv->height * 2 != y->height || !y->height) return NULL;
+    // The game writes each frame into one of a few texture pairs it takes turns with. Until a texture was seen to
+    // change, its contents were checked only every 8th frame (textures.c upload_texture): for the first second of a
+    // movie, some frames showed a pair's old contents, black or a dark Y under the new colour (black flickers).
+    renderer_mark_dynamic(y);
+    renderer_mark_dynamic(uv);
+    return y;
+}
+
+// A movie frame keeps the movie's shape. The game draws it over the whole target, which on a picture of another shape
+// (16:10, 21:9) stretched it: drawn instead in the largest rectangle of the movie's shape, centred, the pass's clear
+// showing as bars.
+static bool movie_viewport(NvnTexture *y, const float *vp, float out[4]) {
+    float pw, ph;
+    pass_guest_size(&pw, &ph);
+    if (vp[0] != 0 || vp[1] != 0 || vp[2] != pw || vp[3] != ph || !pass_h) return false;
+    float movie = (float)y->width / (float)y->height, screen = vp[2] / vp[3];
+    if (fabsf(movie / screen - 1.0f) < 0.01f) return false;
+    float w = vp[2], h = vp[3];
+    if (screen > movie && g_config.scale_mode == SCALE_FILL) h = w / movie;  // (ScaleMode Fill: as wide as the screen, cut above and below)
+    else if (screen > movie) w = h * movie;
+    else h = w / movie;
+    out[0] = (vp[2] - w) * 0.5f, out[1] = (vp[3] - h) * 0.5f, out[2] = w, out[3] = h;
+    return true;
+}
+
 static void draw(CmdRec *r, bool indexed) {
     if (!st.program) { stat_skipped++; return; }
     ShaderKey vkey = {0}, fkey = {0};
@@ -2473,8 +2855,9 @@ static void draw(CmdRec *r, bool indexed) {
     if (st.color_state[2] >= 1 && st.color_state[2] <= 7) fkey.alpha_func = st.color_state[2];  // (NVN alpha test)
     Prog *pr = get_program(st.program, &vkey, &fkey);
     if (!pr) { stat_skipped++; return; }
-    if (!await_build(&pr->state, pr)) { skip_draw(&stat_skip_prog); return; }
+    if (!await_build(&pr->state, pr, 0)) { skip_draw(&stat_skip_prog); return; }
     if (fxaa_skipped(pr)) return;
+    NvnTexture *movie = movie_picture(pr);
     uint32_t mode = (uint32_t)r->x[0];
     VkPrimitiveTopology topo;
     bool native = topology(mode, &topo);
@@ -2494,7 +2877,7 @@ static void draw(CmdRec *r, bool indexed) {
         fkey.alpha_coverage = (uint8_t)pass_samples;
         pr = get_program(st.program, &vkey, &fkey);
         if (!pr) { stat_skipped++; return; }
-        if (!await_build(&pr->state, pr)) { skip_draw(&stat_skip_prog); return; }
+        if (!await_build(&pr->state, pr, 0)) { skip_draw(&stat_skip_prog); return; }
     }
 
     // ---- pipeline
@@ -2573,7 +2956,10 @@ static void draw(CmdRec *r, bool indexed) {
         pipecache_store(pp);
         run_job(build_pipeline, pp);
     }
-    if (!await_build(&pp->state, pp)) { skip_draw(&stat_skip_pipe); return; }
+    // A movie frame is the whole picture: skipped, the screen showed the pass's black clear for a few frames at the
+    // start of the first movie after an update (its pipeline not in cache/pipelines.bin yet, ~2 frames to build). It
+    // waits for its pipeline, so the picture before it stays up that long instead.
+    if (!await_build(&pp->state, pp, movie ? 2000000000ll : 0)) { skip_draw(&stat_skip_pipe); return; }
     if (ss_need(SS_PIPE, ss.pipe == pp->pipe)) { ss.pipe = pp->pipe; vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pp->pipe); }
 
     // ---- dynamic state
@@ -2594,17 +2980,24 @@ static void draw(CmdRec *r, bool indexed) {
         if (k.depth_bias) memcpy(f, st.poly_offset, sizeof f);
         if (ss_need(SS_DB, !memcmp(ss.db, f, sizeof f))) { memcpy(ss.db, f, sizeof f); vkCmdSetDepthBias(cb, f[1], f[2], f[0]); }
     }
-    float *vp = st.viewport[0];
-    set_viewport(cb, vp[0], vp[1], vp[2], vp[3], st.depth_range[0][0], st.depth_range[0][1]);
+    float *vp = st.viewport[0], movie_vp[4], v[4];
+    PreviewMap pm;
+    if (movie && movie_viewport(movie, vp, movie_vp)) vp = movie_vp;
+    memcpy(v, vp, sizeof v);
+    if (vp != movie_vp && ui_preview_map(&pm)) {  // (a model preview: the viewport keeps its size, its centre moves)
+        v[0] = pm.sx + (vp[0] + vp[2] * 0.5f) * pm.kx - vp[2] * 0.5f;
+        v[1] = pm.sy + (vp[1] + vp[3] * 0.5f) * pm.ky - vp[3] * 0.5f;
+    }
+    set_viewport(cb, v[0], v[1], v[2], v[3], st.depth_range[0][0], st.depth_range[0][1]);
     apply_scissor(cb);
 
     // ---- descriptor sets
     VkDescriptorSet sets[2] = {stage_set(pr->nbinds, pr->binds, pr->set_layout[0], 0, 0, pr->vi, 0, 0, 0),
                                stage_set(pr->nbinds, pr->binds, pr->set_layout[1], 1, 1, pr->fi, 0, 0, 0)};
     vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pr->layout, 0, 2, sets, 0, NULL);
-    if (ui_relax_scissor) {  // (set while the constants above were built: for this draw only; the next draw and any
-        apply_scissor(cb);   // clear before it get the game's scissor again)
-        ui_relax_scissor = false;
+    if (ui_relax_scissor || ui_scissor_v >= 0) {  // (set while the constants above were built: for this draw only; the
+        apply_scissor(cb);                        // next draw and any clear before it get the game's scissor again)
+        ui_relax_scissor = false, ui_scissor_v = -1;
     }
 
     // ---- indices (copied; the largest index bounds the vertex data copied below)

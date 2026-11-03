@@ -1,7 +1,6 @@
 #include "cpu.h"
 #include "neon_rt.h"
 void f_2400024(Cpu *c);
-void f_2400218(Cpu *c);
 void f_2400288(Cpu *c);
 void f_27ea540(Cpu *c);
 void f_27ea5bc(Cpu *c);
@@ -189,10 +188,6 @@ void f_28553b8(Cpu *c);
 void f_28553c4(Cpu *c);
 void f_28553d0(Cpu *c);
 void f_28553dc(Cpu *c);
-void f_28553e8(Cpu *c);
-void f_28553f4(Cpu *c);
-void f_2855400(Cpu *c);
-void f_285540c(Cpu *c);
 void f_2855418(Cpu *c);
 void f_2855424(Cpu *c);
 void f_2855430(Cpu *c);
@@ -362,6 +357,8 @@ void hle_memcmp(Cpu *c);
 void hle_strcmp(Cpu *c);
 void hle_strncmp(Cpu *c);
 void hle_memcpy(Cpu *c);
+void hle_abort(Cpu *c);
+void hle_exit(Cpu *c);
 void f_27ea170(Cpu *restrict c) {
     FN_ENTER(0x27ea170u);
 L_27ea170:;
@@ -17527,13 +17524,7 @@ L_27f9ff4:;
     __attribute__((musttail)) return f_28553d0(c);
 }
 void f_27f9ff8(Cpu *restrict c) {
-    FN_ENTER(0x27f9ff8u);
-L_27f9ff8:;
-    { uint32_t ea = c->r[13] - 8u; ST32(ea + 0u, c->r[11]); ST32(ea + 4u, c->r[14]); c->r[13] = c->r[13] - 8u; }
-    c->r[11] = c->r[13];
-    c->r[0] = 0x1u;
-    c->r[14] = 0x27fa00cu;
-    __attribute__((musttail)) return f_28553dc(c);
+    hle_abort(c);
 }
 void f_27fa00c(Cpu *restrict c) {
     FN_ENTER(0x27fa00cu);
@@ -17611,18 +17602,7 @@ L_27fa0ac:;
     { uint32_t ea = c->r[13]; c->r[13] = c->r[13] + 16u; c->r[4] = LD32(ea + 0u); c->r[5] = LD32(ea + 4u); c->r[11] = LD32(ea + 8u); c->pc = LD32(ea + 12u); } return;
 }
 void f_27fa11c(Cpu *restrict c) {
-    FN_ENTER(0x27fa11cu);
-L_27fa11c:;
-    { uint32_t ea = c->r[13] - 16u; ST32(ea + 0u, c->r[4]); ST32(ea + 4u, c->r[10]); ST32(ea + 8u, c->r[11]); ST32(ea + 12u, c->r[14]); c->r[13] = c->r[13] - 16u; }
-    c->r[11] = c->r[13] + 0x8u;
-    c->r[4] = c->r[0];
-    c->r[14] = 0x27fa12cu; f_28553e8(c);
-    c->r[14] = 0x27fa130u; f_2400218(c);
-    c->r[14] = 0x27fa134u; f_28553f4(c);
-    c->r[14] = 0x27fa138u; f_2855400(c);
-    c->r[0] = c->r[4];
-    c->r[14] = 0x27fa144u;
-    __attribute__((musttail)) return f_285540c(c);
+    hle_exit(c);
 }
 void f_27fa144(Cpu *restrict c) {
     FN_ENTER(0x27fa144u);

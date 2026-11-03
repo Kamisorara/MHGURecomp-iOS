@@ -81,6 +81,7 @@ typedef struct {
     char touch_combo[TOUCH_COMBOS][32];  // Combo1..: the buttons one screen button presses together ("A+X"; "" none)
     int touch_combo_pad[TOUCH_COMBOS];   // Combo1Pad..: PADB_*, a controller's button that does the same
     int language;             // 0: English, 1: Spanish (the port's own menus only)
+    float draw_distance;      // [Graphics] DrawDistance: town NPCs' fade distance factor, 0 no limit (config.c npc_fade_dist2)
 } Config;
 uint32_t config_combo_mask(const char *text);  // "A+X" -> the BTN_* bits, 0 if there is nothing or anything else in it
 void config_combo_text(uint32_t mask, char *out, size_t size);  // and back
@@ -122,7 +123,11 @@ int config_live_touch_vibration(void);
 int config_live_phone_rumble(void);
 float config_live_mouse_sensitivity(void);
 int config_live_face_buttons(void);
+int config_live_vsync(void);  // [Application] VSync (device.c: a change remakes the swapchain)
+int config_live_msaa(void);   // settings MSAA (device.c: applied to the next frame)
 int config_language(void);  // the port's own menus' language, atomic across host threads
+float config_live_draw_distance(void);  // [Graphics] DrawDistance
+float npc_fade_dist2(float d2);  // a town NPC's squared fade-in distance, scaled (tools/gen.py PATCHES hands it)
 
 #ifdef __cplusplus
 }

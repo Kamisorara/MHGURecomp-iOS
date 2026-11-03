@@ -8,7 +8,8 @@
 #include "config.h"
 
 static SDL_AtomicInt live_touch_controls, live_touch_hud, live_lock_on, live_touch_vibration, live_phone_rumble,
-    live_language;
+    live_language, live_vsync, live_msaa;
+static SDL_AtomicInt live_draw_distance;  // float as its bits
 static SDL_AtomicInt live_touch_show[TB_COUNT];
 static SDL_AtomicInt live_touch_combo[TOUCH_COMBOS], live_touch_combo_pad[TOUCH_COMBOS];
 static SDL_AtomicInt live_mouse_sens, live_touch_cam, live_touch_opacity;  // floats as their bits
@@ -55,6 +56,9 @@ void config_runtime_init(const Config *c) {
     SDL_SetAtomicInt(&live_touch_vibration, c->touch_vibration);
     SDL_SetAtomicInt(&live_phone_rumble, c->phone_rumble);
     SDL_SetAtomicInt(&live_language, c->language);
+    SDL_SetAtomicInt(&live_vsync, c->vsync);
+    SDL_SetAtomicInt(&live_msaa, c->msaa);
+    set_float(&live_draw_distance, c->draw_distance);
     set_float(&live_mouse_sens, c->mouse_sensitivity);
     set_float(&live_touch_cam, c->touch_camera);
     set_float(&live_touch_opacity, c->touch_opacity);
@@ -77,4 +81,7 @@ int config_live_touch_vibration(void) { return SDL_GetAtomicInt(&live_touch_vibr
 int config_live_phone_rumble(void) { return SDL_GetAtomicInt(&live_phone_rumble); }
 float config_live_mouse_sensitivity(void) { return get_float(&live_mouse_sens); }
 int config_live_face_buttons(void) { return g_config.face_buttons; }  // (read before the pads are: no live change yet)
+int config_live_vsync(void) { return SDL_GetAtomicInt(&live_vsync); }
+int config_live_msaa(void) { return SDL_GetAtomicInt(&live_msaa); }
+float config_live_draw_distance(void) { return get_float(&live_draw_distance); }
 int config_language(void) { return SDL_GetAtomicInt(&live_language); }

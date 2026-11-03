@@ -7530,7 +7530,7 @@ L_a6f97c:;
 L_a6f9a8:;
     { uint32_t ea = c->r[1] + 0x30u; ST32(ea, c->r[2]); }
 L_a6f9ac:;
-    c->r[1] = 0x1u;
+    { extern void backend_photo_requested(void); backend_photo_requested(); c->r[1] = 1; }
     { uint32_t ea = c->r[0] + 0x2cu; ST8(ea, c->r[1]); }
     return;
 }

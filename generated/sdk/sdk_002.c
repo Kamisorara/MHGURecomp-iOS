@@ -13,7 +13,6 @@ void f_2443c34(Cpu *c);
 void f_24455f8(Cpu *c);
 void f_24459a8(Cpu *c);
 void f_2445ca0(Cpu *c);
-void f_244a148(Cpu *c);
 void f_244a17c(Cpu *c);
 void f_244a1b0(Cpu *c);
 void f_244a1e4(Cpu *c);
@@ -108,7 +107,6 @@ void f_283b57c(Cpu *c);
 void f_283b588(Cpu *c);
 void f_283b594(Cpu *c);
 void f_283b5ac(Cpu *c);
-void f_283b5b8(Cpu *c);
 void f_283b5c4(Cpu *c);
 void f_283b5d0(Cpu *c);
 void f_283b5dc(Cpu *c);
@@ -176,6 +174,7 @@ void f_283b8b8(Cpu *c);
 void f_283b8c4(Cpu *c);
 void f_283b8d0(Cpu *c);
 void f_283b8dc(Cpu *c);
+void hle__ZN2nn4diag6detail10VAbortImplEPKcS3_S3_iPKNS_6ResultEPKNS_2os17UserExceptionInfoES3_St9__va_list(Cpu *c);
 void f_24392c8(Cpu *restrict c) {
     FN_ENTER(0x24392c8u);
 L_24392c8:;
@@ -19311,39 +19310,7 @@ L_244a05c:;
     __attribute__((musttail)) return f_2400288(c);
 }
 void f_244a0d0(Cpu *restrict c) {
-    FN_ENTER(0x244a0d0u);
-L_244a0d0:;
-    { uint32_t ea = c->r[13] - 32u; ST32(ea + 0u, c->r[4]); ST32(ea + 4u, c->r[5]); ST32(ea + 8u, c->r[6]); ST32(ea + 12u, c->r[7]); ST32(ea + 16u, c->r[8]); ST32(ea + 20u, c->r[10]); ST32(ea + 24u, c->r[11]); ST32(ea + 28u, c->r[14]); c->r[13] = c->r[13] - 32u; }
-    c->r[11] = c->r[13] + 0x18u;
-    c->r[13] = c->r[13] - 0x48u;
-    { uint32_t ea = c->r[11] + 0x14u; uint32_t v = LD32(ea); c->r[4] = v; }
-    c->r[12] = c->r[13] + 0x28u;
-    c->r[8] = c->r[13];
-    { uint32_t ea = c->r[11] - 0x1cu; ST32(ea, c->r[4]); }
-    { uint32_t ea = c->r[11] + 0x10u; uint32_t v = LD32(ea); c->r[4] = v; }
-    { uint32_t ea = c->r[11] - 0x24u; ST32(ea, c->r[4]); }
-    c->r[4] = c->r[11] - 0x1cu;
-    { uint32_t ea = c->r[11] - 0x20u; ST32(ea, c->r[4]); }
-    c->r[4] = 0x3u;
-    { uint32_t ea = c->r[13] + 0x20u; ST32(ea, c->r[4]); }
-    c->r[4] = c->r[11] - 0x24u;
-    { uint32_t ea = c->r[13] + 0x24u; ST32(ea, c->r[4]); }
-    { uint32_t ea = c->r[12]; ST32(ea + 0u, c->r[0]); ST32(ea + 4u, c->r[1]); ST32(ea + 8u, c->r[2]); ST32(ea + 12u, c->r[3]); }
-    c->r[0] = c->r[13] + 0x20u;
-    c->r[2] = c->r[8];
-    c->r[12] = c->r[0];
-    { uint32_t ea = c->r[12]; c->r[1] = LD32(ea + 0u); c->r[3] = LD32(ea + 4u); c->r[4] = LD32(ea + 8u); c->r[5] = LD32(ea + 12u); c->r[6] = LD32(ea + 16u); c->r[7] = LD32(ea + 20u); }
-    { uint32_t ea = c->r[2]; ST32(ea + 0u, c->r[1]); ST32(ea + 4u, c->r[3]); ST32(ea + 8u, c->r[4]); ST32(ea + 12u, c->r[5]); ST32(ea + 16u, c->r[6]); ST32(ea + 20u, c->r[7]); }
-    { uint32_t ea = c->r[11] + 0x8u; uint32_t v = LD32(ea); c->r[1] = v; }
-    { uint32_t ea = c->r[1]; uint32_t v = LD32(ea); c->r[1] = v; }
-    { uint32_t ea = c->r[13] + 0x18u; ST32(ea, c->r[1]); }
-    { uint32_t ea = c->r[11] + 0xcu; uint32_t v = LD32(ea); c->r[1] = v; }
-    { uint32_t ea = c->r[13] + 0x1cu; ST32(ea, c->r[1]); }
-    c->r[14] = 0x244a13cu; f_283b5ac(c);
-    c->r[0] = c->r[8];
-    c->r[14] = 0x244a144u; f_283b5b8(c);
-    c->r[14] = 0x244a148u; f_283b5c4(c);
-    __attribute__((musttail)) return f_244a148(c);
+    hle__ZN2nn4diag6detail10VAbortImplEPKcS3_S3_iPKNS_6ResultEPKNS_2os17UserExceptionInfoES3_St9__va_list(c);
 }
 void f_244a148(Cpu *restrict c) {
     FN_ENTER(0x244a148u);
@@ -27432,4 +27399,34 @@ L_24510bc:;
     c->r[0] = (c->r[0] & 0xFFFFu) | 0x2f0000u;
     c->r[13] = c->r[11] - 0x18u;
     { uint32_t ea = c->r[13]; c->r[13] = c->r[13] + 32u; c->r[4] = LD32(ea + 0u); c->r[5] = LD32(ea + 4u); c->r[6] = LD32(ea + 8u); c->r[7] = LD32(ea + 12u); c->r[8] = LD32(ea + 16u); c->r[9] = LD32(ea + 20u); c->r[11] = LD32(ea + 24u); c->pc = LD32(ea + 28u); } return;
+}
+void f_24510cc(Cpu *restrict c) {
+    FN_ENTER(0x24510ccu);
+L_24510cc:;
+    { uint32_t ea = c->r[13] - 16u; ST32(ea + 0u, c->r[4]); ST32(ea + 4u, c->r[5]); ST32(ea + 8u, c->r[11]); ST32(ea + 12u, c->r[14]); c->r[13] = c->r[13] - 16u; }
+    c->r[11] = c->r[13] + 0x8u;
+    c->r[13] = c->r[13] - 0x8u;
+    c->r[5] = c->r[0];
+    c->r[4] = 0x0u;
+    { uint32_t ea = c->r[5] + 0x8u; uint32_t v = LD32(ea); c->r[5] = ea; c->r[1] = v; }
+    { uint32_t ea = c->r[5] + 0x4u; uint32_t v = LD32(ea); c->r[2] = v; }
+    c->r[1] = c->r[1] & c->r[2];
+    (void)f_adds(c, c->r[1], 0x1u);
+    if (COND_NE) { goto L_2451120; }
+    { uint32_t ea = c->r[0] + 0x4u; uint32_t v = LD32(ea); c->r[0] = v; }
+    { uint32_t ea = c->r[0]; uint32_t v = LD32(ea); c->r[1] = v; }
+    { uint32_t ea = c->r[1] + 0x18u; uint32_t v = LD32(ea); c->r[2] = v; }
+    c->r[1] = c->r[13];
+    c->pc = c->r[2]; c->r[14] = 0x2451108u; rt_dispatch(c);
+    (void)f_subs(c, c->r[0], 0x0u);
+    if (COND_EQ) { goto L_2451118; }
+    c->r[4] = c->r[0];
+    goto L_2451120;
+L_2451118:;
+    { uint32_t ea = c->r[13]; c->r[0] = LD32(ea + 0u); c->r[1] = LD32(ea + 4u); }
+    { uint32_t ea = c->r[5]; ST32(ea, c->r[0]); ST32(ea + 4, c->r[1]); }
+L_2451120:;
+    c->r[0] = c->r[4];
+    c->r[13] = c->r[11] - 0x8u;
+    { uint32_t ea = c->r[13]; c->r[13] = c->r[13] + 16u; c->r[4] = LD32(ea + 0u); c->r[5] = LD32(ea + 4u); c->r[11] = LD32(ea + 8u); c->pc = LD32(ea + 12u); } return;
 }

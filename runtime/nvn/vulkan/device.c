@@ -15,6 +15,7 @@
 #include <unistd.h>
 
 #include "../../overlay.h"
+#include "../../touch.h"
 #include "vk.h"
 
 #ifndef VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME
@@ -329,12 +330,14 @@ void vk_set_msaa(uint32_t n) {
 }
 
 // ================================================================== swapchain
+static int configured_msaa = -1;  // (the MSAA last applied: frame_begin re-applies a change at once)
+static int swapchain_vsync;       // (the VSync the swapchain was made for: frame_begin remakes it on a change)
 static VkPresentModeKHR present_mode(void) {
     // MAILBOX by default: no tearing, and the game paces itself (its own 30 fps vsync waits); with FIFO the game's frames
     // also queued behind the display's, dropping to ~26 fps on the R9. FIFO where there is no mailbox.
     const char *e = getenv("MHGU_VK_PRESENT"), *v = getenv("MHGU_VSYNC");
     if (!e && v) e = atoi(v) ? "fifo" : "immediate";
-    if (!e) e = g_config.vsync ? "mailbox" : "immediate";  // (mhgurecomp.ini VSync)
+    if (!e) e = config_live_vsync() ? "mailbox" : "immediate";  // ([Application] VSync, live: a change remakes the swapchain)
     VkPresentModeKHR want = !strcmp(e, "fifo") ? VK_PRESENT_MODE_FIFO_KHR
                           : !strcmp(e, "immediate") ? VK_PRESENT_MODE_IMMEDIATE_KHR : VK_PRESENT_MODE_MAILBOX_KHR;
     uint32_t n = 0;
@@ -385,6 +388,7 @@ static void create_swapchain(void) {
         .compositeAlpha = composite, .presentMode = present_mode(), .clipped = VK_TRUE,
         .oldSwapchain = old};
     VK_CHECK(vkCreateSwapchainKHR(g_vk.dev, &ci, NULL, &g_vk.swapchain));
+    swapchain_vsync = config_live_vsync();  // (what this swapchain was made for: frame_begin remakes it on a change)
     for (uint32_t i = 0; i < g_vk.sc_count; i++) {
         vkDestroyFramebuffer(g_vk.dev, sc_fb[i], NULL);
         vkDestroyImageView(g_vk.dev, g_vk.sc_views[i], NULL);
@@ -454,7 +458,12 @@ static bool frame_begin(void) {
     int w, h;
     SDL_GetWindowSizeInPixels(ui_window(), &w, &h);
     if (!w || !h) return false;  // minimised
-    if (!g_vk.swapchain || (uint32_t)w != g_vk.sc_extent.width || (uint32_t)h != g_vk.sc_extent.height) recreate_swapchain();
+    int msaa = config_live_msaa();
+    if (configured_msaa < 0) configured_msaa = g_config.msaa;
+    if (msaa != configured_msaa) { vk_set_msaa((uint32_t)msaa); configured_msaa = msaa; }
+    if (!g_vk.swapchain || (uint32_t)w != g_vk.sc_extent.width || (uint32_t)h != g_vk.sc_extent.height ||
+        config_live_vsync() != swapchain_vsync)
+        recreate_swapchain();
     if (!g_vk.swapchain) return false;
     slot = (slot + 1) % FRAMES;
     if (!acquire_sem[slot]) acquire_sem[slot] = binary_semaphore();
@@ -620,9 +629,7 @@ void backend_present(NvnTexture *t) {
     }
     g_frames++;
     g_present_count = g_frames;
-    if ((g_frames % 60) == 0 || g_frames < 10) {
-        LOG("[vk] frame %llu presented (tex %ux%u)\n", (unsigned long long)g_frames, t ? t->width : 0, t ? t->height : 0);
-    }
+    touch_hud_frame();  // (the touch controls: where this frame's HUD parts were, runtime/touch.cpp)
     {   // (debug) MHGU_CONTROL "dump": the next whole frame's passes (exec.c dump_pass)
         extern volatile int g_dump_active, g_dump_request;
         extern int g_dump_no, g_dump_frame;
