@@ -16,7 +16,18 @@
 #include "config.h"
 #include "rt.h"
 
-Config g_config = {DISPLAY_BORDERLESS, 1920, 1080, 0, 0, 60, 1, 1, 1, FACE_POSITION, 39500, "", 1, 1, 1, {{1, 1, 1, 1}, 2}, 1.0f, 0.0f, 1.0f, UI_CENTER, 1, 0, SCALE_AUTO, 0, COMBO_LENIENT};
+// The values a fresh settings file gets. Kept in one place so config_defaults() and g_config can't drift apart.
+#define CONFIG_DEFAULT_VALUES                                                                                          \
+    DISPLAY_BORDERLESS, 1920, 1080, 0, 0, 60, 1, 1, 1, FACE_POSITION, 39500, "", 1, 1, 1, {{1, 1, 1, 1}, 2}, 1.0f, 0.0f, \
+        1.0f, UI_CENTER, 1, 0, SCALE_AUTO, 0, COMBO_LENIENT, TOUCH_AUTO, 1, 1.0f, 0.8f, 1, 1, 1, TOUCH_SHOW_DEFAULT,     \
+        {"", "", "", "", "", ""}, {0, 0, 0, 0, 0, 0}, 0
+
+Config g_config = {CONFIG_DEFAULT_VALUES};
+Config config_defaults(void) { Config c = {CONFIG_DEFAULT_VALUES}; return c; }
+
+// A hunting party's screen layout: what the settings menu edits before saving (runtime/config_store.c takes the
+// snapshot the live getters read). g_config itself keeps what this process started with where a change needs a restart.
+Config config_editable(void) { return g_config; }
 static volatile int g_window_focused = 1;
 
 int config_live_combo_window(void) {
@@ -154,7 +165,67 @@ static const char DEFAULT_INI[] =
     "; next to mhgurecomp.exe) into a save that has never had any downloads, such as a new one. Only the download data\n"
     "; is written, once; saves that already have downloads are left alone. Without a donor save nothing happens.\n"
     "; Off: saves are never changed.\n"
-    "BonusContent = On\n";
+    "BonusContent = On\n"
+    "\n"
+    "[Touch]\n"
+    "; The controls on the screen (runtime/touch.cpp). Auto: shown while no controller is connected, hidden when one is.\n"
+    "; On: always. Off: never.\n"
+    "Controls = Auto\n"
+    "\n"
+    "; MoveHUD: On or Off. While the controls show, the game's own HUD moves out of the thumbs' way: the status to the\n"
+    "; left edge, the item bar to the bottom middle, the Hunter Arts and the target camera to the top right.\n"
+    "MoveHUD = On\n"
+    "\n"
+    "; CameraSpeed: the camera's turn for a drag across the screen's height. 1 is about 90 degrees. 0.2 to 5.\n"
+    "CameraSpeed = 1.0\n"
+    "\n"
+    "; Opacity of the controls: 0.2 (faint) to 1 (solid).\n"
+    "Opacity = 0.8\n"
+    "\n"
+    "; Vibration: a short tick when a touch control is pressed. PhoneRumble: the game's rumble on the phone too.\n"
+    "Vibration = On\n"
+    "PhoneRumble = On\n"
+    "\n"
+    "; LockOn: the camera stays on the monster, and with a bow or a bowgun the shots turn to it (the target camera's\n"
+    "; icon on the screen, or a controller's right stick click, turns it on and off).\n"
+    "LockOn = On\n"
+    "\n"
+    "; Show*: which of the game's buttons are on the screen in a hunt. The attacks, dodge, guard and sheathe are what a\n"
+    "; hunt needs; the rest can be turned off to clear the screen.\n"
+    "ShowAttacks = On\n"
+    "ShowDodge = On\n"
+    "ShowGuard = On\n"
+    "ShowSheathe = On\n"
+    "ShowPlus = On\n"
+    "ShowMinus = Off\n"
+    "ShowDpad = Off\n"
+    "ShowL = Off\n"
+    "ShowZL = Off\n"
+    "ShowZR = Off\n"
+    "ShowL3 = Off\n"
+    "ShowR3 = Off\n"
+    "ShowStick = On\n"
+    "ShowRanged = On\n"
+    "ShowFire = On\n"
+    "ShowSecond = On\n"
+    "ShowAim = On\n"
+    "ShowRangedSpecial = On\n"
+    "ShowAmmo = On\n"
+    "ShowItemArrows = Off\n"
+    "\n"
+    "; Combo1..Combo6: the game's buttons one screen button presses together (\"A+X\", \"L+R\"); its label is the keys.\n"
+    "; Combo1Pad..: a controller's button that does the same (L3, R3, Minus, Guide, Misc, Paddle1..4, Touchpad).\n"
+    "; Empty: no such button on the screen.\n"
+    "Combo1 =\n"
+    "Combo2 =\n"
+    "Combo3 =\n"
+    "Combo4 =\n"
+    "Combo5 =\n"
+    "Combo6 =\n"
+    "\n"
+    "[Application]\n"
+    "; Language of the port's own menus: English or Spanish.\n"
+    "Language = English\n";
 
 static void ini_path(char *buf, size_t size) {
     const char *e = getenv("MHGU_CONFIG");
@@ -233,6 +304,39 @@ static bool parse_anchor(const char *v, int *out) {
 
 static int desktop_w, desktop_h;
 static bool render_auto = true;
+
+static bool parse_bool(const char *v, int *out) {
+    if (!strcmp(v, "on") || !strcmp(v, "1") || !strcmp(v, "true") || !strcmp(v, "yes")) { *out = 1; return true; }
+    if (!strcmp(v, "off") || !strcmp(v, "0") || !strcmp(v, "false") || !strcmp(v, "no")) { *out = 0; return true; }
+    return false;
+}
+
+// [Touch] Show<button> (the key already squashed, lower case: "showattacks" -> "attacks"). -1: not one of them.
+static int touch_show_key(const char *rest, const char *v) {
+    static const struct { const char *key; int tb; } keys[] = {
+        {"attacks", TB_ATTACKS}, {"dodge", TB_DODGE}, {"guard", TB_GUARD}, {"sheathe", TB_SHEATHE}, {"plus", TB_PLUS},
+        {"minus", TB_MINUS}, {"dpad", TB_DPAD}, {"l", TB_L}, {"zl", TB_ZL}, {"zr", TB_ZR}, {"l3", TB_L3}, {"r3", TB_R3},
+        {"stick", TB_STICK}, {"ranged", TB_RANGED}, {"fire", TB_FIRE}, {"second", TB_SECOND}, {"aim", TB_AIM},
+        {"rangedspecial", TB_RSPECIAL}, {"ammo", TB_AMMO}, {"itemarrows", TB_ITEM_ARROWS},
+    };
+    for (size_t i = 0; i < sizeof keys / sizeof *keys; i++)
+        if (!strcmp(rest, keys[i].key)) {
+            int on;
+            if (!parse_bool(v, &on)) return -1;
+            g_config.touch_show[keys[i].tb] = on;
+            return keys[i].tb;
+        }
+    return -1;
+}
+
+// [Touch] Combo<n>Pad: the name of a controller's button a combined screen button presses too.
+static int pad_button_of(const char *v) {
+    static const char *const names[PADB_COUNT] = {"", "l3", "r3", "minus", "guide", "misc", "paddle1", "paddle2",
+                                                 "paddle3", "paddle4", "touchpad"};
+    for (int i = 1; i < PADB_COUNT; i++)
+        if (!strcmp(v, names[i])) return i;
+    return PADB_NONE;
+}
 
 static void set_key(const char *key, char *val, int line) {
     char k[64], v[256];
@@ -347,6 +451,41 @@ static void set_key(const char *key, char *val, int line) {
     } else if (!strcmp(k, "fps") || !strcmp(k, "framerate")) {
         int f = atoi(v);
         if (f >= 30 && f <= 240) g_config.fps = f;
+        else ok = false;
+    } else if (!strcmp(k, "controls")) {  // ([Touch] Controls: no other section has a key of this name)
+        if (!strcmp(v, "auto")) g_config.touch_controls = TOUCH_AUTO;
+        else if (!strcmp(v, "on") || !strcmp(v, "always")) g_config.touch_controls = TOUCH_ON;
+        else if (!strcmp(v, "off") || !strcmp(v, "never")) g_config.touch_controls = TOUCH_OFF;
+        else ok = false;
+    } else if (!strcmp(k, "movehud") || !strcmp(k, "touchhud")) {
+        ok = parse_bool(v, &g_config.touch_hud);
+    } else if (!strcmp(k, "cameraspeed")) {
+        float f = strtof(v, NULL);
+        if ((ok = f >= 0.2f && f <= 5.0f)) g_config.touch_camera = f;
+    } else if (!strcmp(k, "opacity")) {
+        float f = strtof(v, NULL);
+        if ((ok = f >= 0.2f && f <= 1.0f)) g_config.touch_opacity = f;
+    } else if (!strcmp(k, "vibration")) {
+        ok = parse_bool(v, &g_config.touch_vibration);
+    } else if (!strcmp(k, "phonerumble")) {
+        ok = parse_bool(v, &g_config.phone_rumble);
+    } else if (!strcmp(k, "lockon")) {
+        ok = parse_bool(v, &g_config.lock_on);
+    } else if (!strncmp(k, "show", 4) && (ok = touch_show_key(k + 4, v) >= 0)) {
+        (void)ok;
+    } else if (!strncmp(k, "combo", 5) && isdigit((unsigned char)k[5])) {
+        // Combo<n> = "A+X" ("" none); Combo<n>Pad = a controller's button doing the same
+        int n = atoi(k + 5), pad = 0;
+        const char *rest = k + 5;
+        while (isdigit((unsigned char)*rest)) rest++;
+        if (!strcmp(rest, "pad")) pad = 1;
+        else ok = !*rest;
+        if (ok && (n < 1 || n > TOUCH_COMBOS)) ok = false;
+        else if (ok && pad) g_config.touch_combo_pad[n - 1] = pad_button_of(val);
+        else if (ok) snprintf(g_config.touch_combo[n - 1], sizeof g_config.touch_combo[0], "%s", val);  // (as written)
+    } else if (!strcmp(k, "language")) {
+        if (!strcmp(v, "english") || !strcmp(v, "en") || !strcmp(v, "0")) g_config.language = 0;
+        else if (!strcmp(v, "spanish") || !strcmp(v, "es") || !strcmp(v, "1")) g_config.language = 1;
         else ok = false;
     } else {
         LOG("[config] line %d: unknown setting \"%s\" (ignored)\n", line, key);
@@ -527,6 +666,7 @@ void config_load(void) {
         hp->scale[0], hp->scale[1], hp->scale[2], hp->scale[3], hp->quests);
     LOG("[config] Village quests at the Hub counter: %s (their HP x%.2f first)\n", g_config.village_in_hub ? "on" : "off",
         hp->village);
+    config_runtime_init(&g_config);  // (the live copies the game and render threads read: runtime/config_store.c)
 }
 
 void config_set_join(const char *join_addr) {

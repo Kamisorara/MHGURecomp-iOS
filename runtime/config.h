@@ -1,6 +1,19 @@
 // Player settings: mhgurecomp.ini in the game folder (written with the defaults when it is missing).
 #pragma once
 #include <stdint.h>
+#include <stddef.h>
+
+// A phone (iOS, Android): no mouse to capture, no window modes, no keyboard. The touch controls draw over the game and
+// move the HUD out of the thumbs' way (runtime/touch.cpp). Files shared with the desktop builds ask this, not
+// __ANDROID__, which iOS never defines.
+#if defined(__ANDROID__)
+#define MHGU_PHONE 1
+#elif defined(__APPLE__)
+#include <TargetConditionals.h>
+#define MHGU_PHONE TARGET_OS_IPHONE  // 1 on iOS and iPadOS, 0 on the Mac
+#else
+#define MHGU_PHONE 0
+#endif
 
 #ifdef __cplusplus
 extern "C" {
@@ -10,6 +23,16 @@ enum { DISPLAY_WINDOWED, DISPLAY_FULLSCREEN, DISPLAY_BORDERLESS };
 enum { FACE_POSITION, FACE_LABEL };
 enum { COMBO_LENIENT, COMBO_STRICT };
 enum { SCALE_FIT, SCALE_FILL, SCALE_STRETCH, SCALE_AUTO };  // how the picture meets a screen of another shape
+enum { TOUCH_AUTO, TOUCH_ON, TOUCH_OFF };  // [Touch] Controls (runtime/touch.cpp)
+
+// The game's buttons, for showing each on the screen or not ([Touch] Show*: runtime/touch.cpp)
+enum { TB_ATTACKS, TB_DODGE, TB_GUARD, TB_SHEATHE, TB_PLUS, TB_MINUS, TB_DPAD, TB_L, TB_ZL, TB_ZR, TB_L3, TB_R3, TB_STICK,
+       TB_RANGED, TB_FIRE, TB_SECOND, TB_AIM, TB_RSPECIAL, TB_AMMO, TB_ITEM_ARROWS, TB_COUNT };
+#define TOUCH_SHOW_DEFAULT {1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 0}
+#define TOUCH_COMBOS 6
+// A controller's buttons a combined button can be on (the less used ones)
+enum { PADB_NONE, PADB_L3, PADB_R3, PADB_MINUS, PADB_GUIDE, PADB_MISC, PADB_PADDLE1, PADB_PADDLE2, PADB_PADDLE3, PADB_PADDLE4,
+       PADB_TOUCHPAD, PADB_COUNT };
 
 // [Monster HP]: factors on the HP multiplier of Hub-type quests' large monsters
 #define HP_QUESTS_MAX 256
@@ -46,7 +69,24 @@ typedef struct {
     int scale_mode;           // SCALE_*: Fit (bars), Fill (zoom, cropped by the scissor) or Stretch; Auto picks per screen
     int mute_in_background;   // [Audio] MuteInBackground: no sound while the window is not focused
     int combo_window;         // [Controls] ComboInputWindow: COMBO_LENIENT / COMBO_STRICT
+    // [Touch]: the controls on a phone's screen (runtime/touch.cpp)
+    int touch_controls;       // TOUCH_*: Auto (no controller connected), On, Off
+    int touch_hud;            // MoveHUD: the HUD moves out of the thumbs' way while they show
+    float touch_camera;       // CameraSpeed: the camera's turn for a drag (1: about 90 degrees a screen height)
+    float touch_opacity;      // Opacity of the controls, 0.2 .. 1
+    int touch_vibration;      // Vibration: a short tick when a control is pressed (runtime/haptics.c)
+    int phone_rumble;         // PhoneRumble: the game's rumble on the phone's vibrator too
+    int lock_on;              // LockOn: the camera stays on the monster, and with it a bow's or gun's shots
+    int touch_show[TB_COUNT]; // Show*: which of the game's buttons are on the screen in a hunt
+    char touch_combo[TOUCH_COMBOS][32];  // Combo1..: the buttons one screen button presses together ("A+X"; "" none)
+    int touch_combo_pad[TOUCH_COMBOS];   // Combo1Pad..: PADB_*, a controller's button that does the same
+    int language;             // 0: English, 1: Spanish (the port's own menus only)
 } Config;
+uint32_t config_combo_mask(const char *text);  // "A+X" -> the BTN_* bits, 0 if there is nothing or anything else in it
+void config_combo_text(uint32_t mask, char *out, size_t size);  // and back
+// The phone's low-end switch sets these two (runtime/touch.cpp, the settings menu)
+#define LOW_END_SCALE 40  // RenderScale: the 3D picture in percent of the screen
+#define LOW_END_FPS 30
 enum { UI_CENTER = 1, UI_21_9, UI_32_9, UI_EDGES };  // the middle 16:9, 21:9, 32:9, the picture's sides
 
 extern Config g_config;
@@ -62,6 +102,27 @@ void config_set_join(const char *join_addr);
 int config_live_combo_window(void);
 void config_window_focus(int focused);
 int config_is_window_focused(void);
+// What the settings menu edits (runtime/settings_panel.cpp): the file's values before the environment overrides and the
+// automatic resolution are worked out, and a copy of g_config to change and save.
+Config config_editable(void);
+Config config_defaults(void);
+void config_runtime_init(const Config *effective);  // publish the live copies (runtime/config_store.c)
+
+// Live settings: read through an atomic from any thread (the render and game threads included), so a change in the
+// menu takes effect at once, without a lock (runtime/config_store.c).
+int config_live_touch_controls(void);  // [Touch]
+int config_live_touch_hud(void);
+int config_live_lock_on(void);
+int config_live_touch_show(int button);       // TB_*
+uint32_t config_live_touch_combo(int index);  // its buttons (config_combo_mask)
+int config_live_touch_combo_pad(int index);   // PADB_*
+float config_live_touch_camera(void);
+float config_live_touch_opacity(void);
+int config_live_touch_vibration(void);
+int config_live_phone_rumble(void);
+float config_live_mouse_sensitivity(void);
+int config_live_face_buttons(void);
+int config_language(void);  // the port's own menus' language, atomic across host threads
 
 #ifdef __cplusplus
 }
