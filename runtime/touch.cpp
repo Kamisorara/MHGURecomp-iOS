@@ -49,8 +49,10 @@ extern volatile uint64_t g_town_ns;  // (hle/quickhunt.c: a town's walking-aroun
 int weapon_drawn(void);  // (hle/weapon.c: 1 the weapon out, 0 sheathed, -1 not known)
 #include "hle/input.h"
 #include "hle/itembar.h"
+#include "hle/chat.h"
 #include "hle/mousecam.h"
 SDL_Window *ui_window(void);
+bool textinput_active(void);
 }
 #include "haptics.h"  // (a short tick on the phone when a control is pressed)
 #include "overlay.h"
@@ -68,7 +70,8 @@ const float PI = 3.14159265f;
 // ------------------------------------------------------------------ the controls and their default places
 enum Ctl {
     C_ATTACK, C_DODGE, C_R, C_ZR, C_ZL, C_L, C_MENU, C_MAP, C_SETTINGS, C_SHEATHE, C_RUN, C_HEAVY, C_LIGHT, C_CORNER,
-    C_HMINUS, C_R3, C_HDPAD, C_COMBO, C_COMBO_END = C_COMBO + TOUCH_COMBOS - 1,
+    C_HMINUS, C_R3, C_HDPAD, C_CHAT,  // (a tap opens a line of chat, runtime/hle/chat.c; [Touch] ShowChat)
+    C_COMBO, C_COMBO_END = C_COMBO + TOUCH_COMBOS - 1,
     C_RFIRE, C_RSECOND, C_RAIM, C_RSPECIAL, C_RDODGE, C_RSHEATHE, C_AMMO_UP, C_AMMO_DOWN,  // (a bow's or a bowgun's)
     C_STICK,                                                                               // (laid out: touch_layout.txt)
     C_DPAD, C_MPILL, C_FX, C_FY, C_MINUS, C_ML, C_MR,  // (the menu layout's: placed from the stick, the pill, the map)
@@ -113,6 +116,7 @@ const Def DEFS[C_COUNT] = {
     {"minus_hunt", "Minus  -", I_MINUS, "-", B(BTN_MINUS), false, .18f, .67f, .046f},
     {"r3", "Right stick click", I_LETTER, "R3", B(BTN_RSTICK), true, .075f, .56f, .045f},
     {"dpad_hunt", "D-pad", I_DPAD, "", 0, false, .33f, .60f, .105f},
+    {"chat", "Chat", I_LETTER, "...", 0, false, .075f, .47f, .05f},  // (a tap opens a line of chat)
     // the player's own ([Touch] Combo1..): what they press and their label are in the settings
     {"combo1", "", I_COMBO, "", 0, true, .60f, .30f, .052f},
     {"combo2", "", I_COMBO, "", 0, true, .60f, .44f, .052f},
@@ -171,6 +175,7 @@ int show_setting(int i) {  // the [Touch] Show* a control follows (the settings 
     case C_ZL: return TB_ZL;
     case C_ZR: return TB_ZR;
     case C_MAP: return TB_L3;
+    case C_CHAT: return TB_CHAT;
     case C_R3: return TB_R3;
     case C_STICK: return TB_STICK;
     default: return -1;
@@ -973,6 +978,8 @@ extern "C" bool touch_event(const SDL_Event *e) {
     }
     // the settings button: a tap opens the port's menu (a long press opened the editor: touch_input)
     if (f->kind == F_BUTTON && f->ctl == C_SETTINGS && !f->done && e->type == SDL_EVENT_FINGER_UP) overlay_toggle_settings();
+    if (f->kind == F_BUTTON && f->ctl == C_CHAT && !f->done && e->type == SDL_EVENT_FINGER_UP && !textinput_active())
+        chat_open();  // (the iOS keyboard takes it from here: runtime/textinput.c)
     if (s.menu) s.tap_ns = 0;  // (in the game's menus L turns pages: no double tap there)
     else if (f->kind == F_CAMERA && tap) {  // a double tap on the camera's part centres it (L)
         if (now - s.tap_ns < 350 * MS && hypotf(x - s.tap_x, y - s.tap_y) < .08f * s.h) pulse(s, B(BTN_L), 60 * MS), s.tap_ns = 0;

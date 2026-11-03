@@ -14,6 +14,10 @@
 #include "kernel.h"
 #include "mods.h"
 
+#ifndef MHGU_VERSION
+#define MHGU_VERSION "unknown"  // (the Makefile gives the build's release: VERSION)
+#endif
+
 const char *g_game_dir = "game";  // folder holding exefs/ and romfs/ (the player's own dump)
 
 // rtld normally runs every module's DT_INIT (which registers it with musl and runs its init_array) before
@@ -45,6 +49,7 @@ static void boot(const char *root) {
     snprintf(npdm_path, sizeof npdm_path, "%s/main.npdm", exefs);
 
     char why[512];
+    LOG("MHGU Recomp %s\n", MHGU_VERSION);
     if (!gamelib_load(why, sizeof why)) FATAL("%s\n", why);
     loader_load(exefs);
     kernel_init();

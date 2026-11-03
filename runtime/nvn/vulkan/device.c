@@ -467,6 +467,7 @@ static bool frame_begin(void) {
     if (!g_vk.swapchain) return false;
     slot = (slot + 1) % FRAMES;
     if (!acquire_sem[slot]) acquire_sem[slot] = binary_semaphore();
+    { extern void vi_pause_wait(void); vi_pause_wait(); }  // ([Application] PauseInBackground: hle/vi.c)
     vk_wait_seq(slot_seq[slot]);
     VkResult r = vkAcquireNextImageKHR(g_vk.dev, g_vk.swapchain, UINT64_MAX, acquire_sem[slot], VK_NULL_HANDLE, &cur_frame.image);
     if (r == VK_ERROR_OUT_OF_DATE_KHR) {

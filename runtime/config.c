@@ -19,8 +19,17 @@
 
 #include "keymap.h"
 
+// Apple: the left button is A and the right one B (the touch player's habits); elsewhere the desktop's (left X,
+// right A). The rest is the same.
+#if defined(__APPLE__)
+#define DEFAULT_BIND_A KEY_MOUSE + SDL_BUTTON_LEFT
+#define DEFAULT_BIND_X KEY_MOUSE + SDL_BUTTON_RIGHT
+#else
+#define DEFAULT_BIND_A KEY_MOUSE + SDL_BUTTON_RIGHT
+#define DEFAULT_BIND_X KEY_MOUSE + SDL_BUTTON_LEFT
+#endif
 #define DEFAULT_BINDS {{SDL_SCANCODE_W}, {SDL_SCANCODE_S}, {SDL_SCANCODE_A}, {SDL_SCANCODE_D}, {SDL_SCANCODE_LSHIFT},     \
-    {KEY_MOUSE + SDL_BUTTON_RIGHT}, {SDL_SCANCODE_SPACE}, {KEY_MOUSE + SDL_BUTTON_LEFT},                               \
+    {DEFAULT_BIND_A}, {SDL_SCANCODE_SPACE}, {DEFAULT_BIND_X},                                                          \
     {SDL_SCANCODE_R, KEY_MOUSE + SDL_BUTTON_MIDDLE},                                                                   \
     {SDL_SCANCODE_Q}, {SDL_SCANCODE_E}, {SDL_SCANCODE_TAB}, {SDL_SCANCODE_T}, {SDL_SCANCODE_RETURN, SDL_SCANCODE_KP_ENTER}, \
     {SDL_SCANCODE_BACKSPACE}, {SDL_SCANCODE_UP}, {SDL_SCANCODE_DOWN}, {SDL_SCANCODE_LEFT}, {SDL_SCANCODE_RIGHT},          \

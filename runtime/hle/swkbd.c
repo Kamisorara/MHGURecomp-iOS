@@ -10,6 +10,7 @@
 #include <string.h>
 
 #include "../hle.h"
+#include "chat.h"
 #include "../textinput.h"
 
 #define ARG_TEXT_MAX 0x7d0
@@ -177,6 +178,7 @@ HLE_FUNC("_ZN2nn5swkbd14InlineKeyboard6AppearERKNS0_9AppearArgE", ik_appear) {
     LOG("[swkbd] inline keyboard shown (frame %llu), AppearArg%s\n", (unsigned long long)g_present_count, hex);
     ik_state = 3;
     ik_ticks = 0;
+    chat_close();  // (the game's own entry takes the keyboard: runtime/hle/chat.c)
     ik_auto = getenv("MHGU_NAME") || getenv("MHGU_INLINE_CANCEL") ? 1 : 0;
     ik_pending_appear = !ik_auto;
     textinput_begin(ik_initial, max);

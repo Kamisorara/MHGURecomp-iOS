@@ -13,6 +13,7 @@ void textinput_end(void);                                  // it is gone (decide
 int textinput_poll(char *out, size_t size, int *chars);    // TI_*: what happened since the last poll; the text now
 
 // window side (the main thread)
+void textinput_peek(char *out, size_t size);  // the text now (to show it), leaving the events
 bool textinput_active(void);
 bool textinput_event(const union SDL_Event *e);  // true: the event was typing (not for the controller mapping)
 void textinput_update(void);                     // each loop pass: the window's text input on / off to match
