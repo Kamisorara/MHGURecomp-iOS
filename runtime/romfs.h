@@ -30,6 +30,12 @@ const char *romfs_file_at(uint64_t off);
 // replaces it), or NULL.
 const char *romfs_host_path(const char *rpath);
 
+// Another image, of a folder alone (a DLC's: services/dlc.c); NULL if it can't be read
+typedef struct RomfsImage RomfsImage;
+RomfsImage *romfs_image_open(const char *dir);
+uint64_t romfs_image_size(const RomfsImage *im);
+uint64_t romfs_image_read(const RomfsImage *im, uint8_t *dst, uint64_t off, uint64_t size);
+
 #ifdef __cplusplus
 }
 #endif

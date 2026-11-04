@@ -93,6 +93,10 @@ typedef struct {
     uint32_t nmix;
     uint8_t sink_used, sink_inputs, sink_input[6];
     Effect *fx;
+    uint32_t *fx_seq, nseq;  // this frame's effects that do something, in the order they run (fx_order)
+    int32_t *fx_seq_mix;     // their mixes
+    uint32_t *fx_seq_ord;    // and order numbers
+    bool fx_dirty;           // an update changed the effects: fx_order again before the next frame
     SplitInfo *spl;
     SplitDest *sdest;
     uint32_t nsdest;
@@ -657,6 +661,14 @@ static uint32_t aux_ring(uint32_t info, uint32_t base, uint32_t count_max, int32
     return n;
 }
 
+// MHGU_AUDIO_LOG, read once: getenv walks the whole environment, and the updates asked for it on every effect and
+// voice, hundreds of times a second.
+static int audio_log(void) {
+    static int on = -1;
+    if (on < 0) on = getenv("MHGU_AUDIO_LOG") ? 1 : 0;
+    return on;
+}
+
 static void aux_process(Effect *fx, Mix *m, uint32_t N, uint64_t frame) {
     uint32_t send_info = fx->aux.send + 0x40, ret_info = fx->aux.ret + 0x40;  // the DSP halves of the headers
     uint32_t send_base = fx->aux.send + 0x80, ret_base = fx->aux.ret + 0x80;
@@ -664,7 +676,7 @@ static void aux_process(Effect *fx, Mix *m, uint32_t N, uint64_t frame) {
     int32_t tmp[4096];
     uint32_t wo = 0;
     static int aux_log = -1;
-    if (aux_log < 0) aux_log = getenv("MHGU_AUDIO_LOG") ? 1 : 0;
+    if (aux_log < 0) aux_log = audio_log() ? 1 : 0;
     if (aux_log && frame % 1000 == 0) {
         const uint32_t *s = (const uint32_t *)G2H(fx->aux.send), *r = (const uint32_t *)G2H(fx->aux.ret);
         LOG("[audren] f%llu aux %x (%u ch, enabled %u): send cpu %u/%u dsp %u/%u, return cpu %u/%u dsp %u/%u\n",
@@ -713,7 +725,7 @@ static void effect_update(Effect *fx, const uint8_t *e) {
         memcpy(&send, e + 0x60, 8);
         memcpy(&ret, e + 0x70, 8);
         if (fx->aux.ch > 24) fx->aux.ch = 24;
-        if (getenv("MHGU_AUDIO_LOG") && (fx->aux.send != (uint32_t)send || fx->aux.ret != (uint32_t)ret))
+        if (audio_log() && (fx->aux.send != (uint32_t)send || fx->aux.ret != (uint32_t)ret))
             LOG("[audren] aux: %u channels, %u samples, send %llx (storage %llx) return %llx (storage %llx)\n",
                 fx->aux.ch, fx->aux.count_max, (unsigned long long)send, (unsigned long long)*(const uint64_t *)(e + 0x68),
                 (unsigned long long)ret, (unsigned long long)*(const uint64_t *)(e + 0x78));
@@ -733,7 +745,7 @@ static void effect_update(Effect *fx, const uint8_t *e) {
         if (e[1] || !i3->ready) {
             memcpy(i3->raw, d, sizeof i3->raw);
             memcpy(&i3->p, d, sizeof i3->p);
-            if (getenv("MHGU_AUDIO_LOG"))
+            if (audio_log())
                 LOG("[audren] i3dl2 init: ch %u rate %u room %.0f/%.0f hf ref %.0f decay %.2f/%.2f refl %.0f/%.3f "
                     "reverb %.0f/%.3f diffusion %.0f density %.0f dry %.3f\n", ch, i3->p.sample_rate, i3->p.room_gain,
                     i3->p.room_hf, i3->p.hf_reference, i3->p.decay_time, i3->p.hf_decay_ratio, i3->p.reflections_gain,
@@ -750,7 +762,7 @@ static void effect_update(Effect *fx, const uint8_t *e) {
     if (e[1] || !fx->rv.ready) {
         memcpy(fx->rv.raw, d, sizeof fx->rv.raw);
         memcpy(&fx->rv.p, d, sizeof fx->rv.p);
-        if (getenv("MHGU_AUDIO_LOG"))
+        if (audio_log())
             LOG("[audren] reverb init: ch %u rate %d early %d/%d pre %d late %d/%d decay %d hf %d col %d gains %d/%d/%d\n",
                 ch, fx->rv.p.sample_rate, fx->rv.p.early_mode, fx->rv.p.early_gain, fx->rv.p.pre_delay,
                 fx->rv.p.late_mode, fx->rv.p.late_gain, fx->rv.p.decay_time, fx->rv.p.hf_decay_ratio,
@@ -763,12 +775,43 @@ static void effect_update(Effect *fx, const uint8_t *e) {
     }
 }
 
+// The effects in the order the DSP runs them on a mix: by their order number (those past the effect count never run),
+// then by slot. apply_effects used to find them by trying every slot for every order number, on every mix: 70 slots
+// of 1.7 KB, 39,200 checks a frame and a cache miss on each, over half the audio thread's time on a Moto g06. Slots
+// that do nothing (no type, a buffer mixer turned off, a reverb not set up) are left out. The effects only change in
+// an update, under the same lock as the frame: the list is made again at the next frame after one (fx_dirty).
+static void fx_order(Renderer *r) {
+    uint32_t n = 0;
+    for (uint32_t i = 0; i < r->effects; i++) {
+        const Effect *fx = &r->fx[i];
+        bool does = (fx->type == 1 && fx->enabled) || fx->type == 2 || (fx->type == 4 && fx->rv.ready) ||
+                    (fx->type == 5 && fx->i3.ready);
+        if (!does || fx->order >= r->effects) continue;
+        uint32_t k = n++;  // (insertion: equal order numbers stay by slot)
+        while (k > 0 && r->fx_seq_ord[k - 1] > fx->order) {
+            r->fx_seq[k] = r->fx_seq[k - 1];
+            r->fx_seq_mix[k] = r->fx_seq_mix[k - 1];
+            r->fx_seq_ord[k] = r->fx_seq_ord[k - 1];
+            k--;
+        }
+        r->fx_seq[k] = i;
+        r->fx_seq_mix[k] = fx->mix_id;
+        r->fx_seq_ord[k] = fx->order;
+    }
+    r->nseq = n;
+}
+
 static void apply_effects(Renderer *r, int32_t mix_id, Mix *m) {
     uint32_t N = r->sample_count;
-    for (uint32_t order = 0; order < r->effects; order++) {
-        for (uint32_t i = 0; i < r->effects; i++) {
-            Effect *fx = &r->fx[i];
-            if (fx->type == 1 && fx->enabled && fx->mix_id == mix_id && fx->order == order) {  // buffer mixer
+    static int no_aux = -1, no_reverb = -1, toggle = -1;
+    if (no_aux < 0) no_aux = getenv("MHGU_NO_AUX") ? 1 : 0;
+    if (no_reverb < 0) no_reverb = getenv("MHGU_NO_REVERB") ? 1 : 0;
+    if (toggle < 0) toggle = getenv("MHGU_REVERB_TOGGLE") ? atoi(getenv("MHGU_REVERB_TOGGLE")) : 0;
+    for (uint32_t q = 0; q < r->nseq; q++) {
+        if (r->fx_seq_mix[q] != mix_id) continue;
+        {
+            Effect *fx = &r->fx[r->fx_seq[q]];
+            if (fx->type == 1) {  // buffer mixer (on: fx_order leaves out those turned off)
                 for (uint32_t k = 0; k < fx->bm.n; k++) {
                     int a = fx->bm.in[k], b = fx->bm.out[k];
                     if (a < 0 || b < 0 || (uint32_t)a >= m->bufs || (uint32_t)b >= m->bufs || fx->bm.vol[k] == 0) continue;
@@ -777,10 +820,7 @@ static void apply_effects(Renderer *r, int32_t mix_id, Mix *m) {
                 }
                 continue;
             }
-            if (fx->mix_id != mix_id || fx->order != order) continue;
             if (fx->type == 2) {  // aux
-                static int no_aux = -1;
-                if (no_aux < 0) no_aux = getenv("MHGU_NO_AUX") ? 1 : 0;
                 if (!no_aux) aux_process(fx, m, N, r->elapsed_frames);
                 continue;
             }
@@ -796,11 +836,8 @@ static void apply_effects(Renderer *r, int32_t mix_id, Mix *m) {
                 out[c] = m->buf + (pout[c] % MIXBUF_MAX) * N;
             }
             if (!ok) continue;
-            static int no_reverb = -1;
-            if (no_reverb < 0) no_reverb = getenv("MHGU_NO_REVERB") ? 1 : 0;
-            static int toggle = -1;
-            if (toggle < 0) toggle = getenv("MHGU_REVERB_TOGGLE") ? atoi(getenv("MHGU_REVERB_TOGGLE")) : 0;
-            int off = no_reverb || !!getenv("MHGU_NO_REVERB") || (toggle && (r->elapsed_frames / toggle) % 2);
+            // ([Audio] Reverb Off: the input through, as a disabled effect; the game's mix is otherwise the same)
+            int off = no_reverb || !config_live_reverb() || (toggle && (r->elapsed_frames / toggle) % 2);
             if (fx->enabled && !off && fx->type == 5) i3dl2_process(&fx->i3, in, out, N);
             else if (fx->enabled && !off) reverb_process(&fx->rv, in, out, N);
             else
@@ -813,10 +850,12 @@ static int hf_log = -1;
 static double hf[1024];
 
 static void render_frame(Renderer *r, float *stereo) {
+    if (r->fx_dirty) fx_order(r), r->fx_dirty = false;
+
     if (hf_log < 0) hf_log = getenv("MHGU_AUDIO_HF") ? 1 : 0;
     uint32_t N = r->sample_count;
     for (uint32_t m = 0; m < r->nmix; m++)
-        if (r->mix[m].buf) memset(r->mix[m].buf, 0, sizeof(float) * MIXBUF_MAX * N);
+        if (r->mix[m].buf) memset(r->mix[m].buf, 0, sizeof(float) * r->mix[m].bufs * N);
     int16_t tmp[HIST + 4096];
     float smp[4096];
     for (uint32_t vi = 0; vi < r->voices; vi++) {
@@ -1069,7 +1108,7 @@ static void update_voice(Renderer *r, Voice *v, const uint8_t *p, uint8_t *out) 
         const uint8_t *b = p + 36 + f * 12;
         if (b[0] && !v->bq_on[f]) {
             v->bq_reset[f] = 1;
-            if (getenv("MHGU_AUDIO_LOG")) {
+            if (audio_log()) {
                 int16_t k[5];
                 memcpy(k, b + 2, 10);
                 LOG("[audren] v%ld biquad%d on: %d %d %d / %d %d\n", (long)(v - r->voice), f, k[0], k[1], k[2], k[3], k[4]);
@@ -1121,7 +1160,7 @@ static void update_voice(Renderer *r, Voice *v, const uint8_t *p, uint8_t *out) 
                 }
             }
             static int vlog = -1;
-            if (vlog < 0) vlog = getenv("MHGU_AUDIO_LOG") ? 1 : 0;
+            if (vlog < 0) vlog = audio_log() ? 1 : 0;
             if (vlog)
                 LOG("[audren] f%llu v%ld wb%d fmt %u rate %u ch %u pitch %.3f vol %.3f mix %d res %u addr %llx size %llx "
                     "[%u,%u) loop %u/%d eos %u ctx %llx ds %llx\n", (unsigned long long)r->elapsed_frames,
@@ -1157,7 +1196,7 @@ static void update_mix(Renderer *r, const uint8_t *p, int id) {
     memcpy(&m->dest_splitter, p + 0x928, 4);
     memcpy(m->vol, p + 0x24, sizeof m->vol);
     if (!m->buf) m->buf = calloc(MIXBUF_MAX * r->sample_count, sizeof(float));
-    if (getenv("MHGU_AUDIO_LOG")) {
+    if (audio_log()) {
         LOG("[audren] mix %d used %u vol %.3f bufs %u dest %d:", id, m->used, m->volume, m->bufs, m->dest);
         for (int i = 0; i < MIXBUF_MAX * MIXBUF_MAX; i++)
             if (m->vol[i] != 0) LOG(" %d>%d=%.3f", i / MIXBUF_MAX, i % MIXBUF_MAX, m->vol[i]);
@@ -1227,7 +1266,7 @@ static void request_update(Renderer *r, IpcReq *req, IpcResp *resp) {
     for (uint32_t i = 0; i < neffects && o + 0x10 <= out->size; i++, o += 0x10) {
         const uint8_t *e = ein + i * 0xC0;
         op[o] = e[2] ? 3 : 4;  // EffectState Enabled / Disabled
-        if (i < r->effects) effect_update(&r->fx[i], e);
+        if (i < r->effects) effect_update(&r->fx[i], e), r->fx_dirty = true;
         static uint32_t seen_types;
         if (e[0] && e[0] < 32 && !(seen_types & (1u << e[0]))) {
             seen_types |= 1u << e[0];
@@ -1235,7 +1274,7 @@ static void request_update(Renderer *r, IpcReq *req, IpcResp *resp) {
             LOG("[audren] effect type %u used%s: slot %u mix %d enabled %u\n", e[0], known ? "" : " (not implemented)", i,
                 *(const int32_t *)(e + 4), e[2]);
         }
-        if (e[0] && getenv("MHGU_AUDIO_LOG")) {
+        if (e[0] && audio_log()) {
             static uint8_t last[16][0xC0];
             if (i < 16 && memcmp(last[i], e, 0xC0)) {
                 memcpy(last[i], e, 0xC0);
@@ -1403,6 +1442,9 @@ SERVICE("audren:u", audren_u) {
         r->chst = calloc(r->voices, sizeof(ChanState));
         r->mix = calloc(r->nmix, sizeof(Mix));
         r->fx = calloc(r->effects ? r->effects : 1, sizeof(Effect));
+        r->fx_seq = calloc(r->effects ? r->effects : 1, sizeof *r->fx_seq);
+        r->fx_seq_mix = calloc(r->effects ? r->effects : 1, sizeof *r->fx_seq_mix);
+        r->fx_seq_ord = calloc(r->effects ? r->effects : 1, sizeof *r->fx_seq_ord);
         renderer_open_output(r);
         r->event = kernel_create_event_pair(&r->event_w, &r->event_r);
         pthread_create(&r->thread, NULL, renderer_tick, r);
@@ -1481,7 +1523,8 @@ RT_ON_RESET(audio_reset) {
             if (r->stream) SDL_DestroyAudioStream(r->stream);
             if (r->wav) { wav_header(r->wav, r->wav_bytes); fclose(r->wav); }
             for (uint32_t m = 0; m < r->nmix; m++) free(r->mix[m].buf);
-            free(r->voice), free(r->chres), free(r->chst), free(r->mix), free(r->fx);  // (reverb delay lines leak)
+            free(r->voice), free(r->chres), free(r->chst), free(r->mix), free(r->fx);
+            free(r->fx_seq), free(r->fx_seq_mix), free(r->fx_seq_ord);  // (reverb delay lines leak)
             free(r);
             g_rens[i] = NULL;
             n++;
@@ -1540,7 +1583,7 @@ static void *audout_thread(void *arg) {
 
 static void audio_out(Service *s, IpcReq *req, IpcResp *resp) {
     AudioOut *a = s->state;
-    if (getenv("MHGU_AUDIO_LOG") && req->cmd != 3 && req->cmd != 7) {
+    if (audio_log() && req->cmd != 3 && req->cmd != 7) {
         IpcBuf *ob = out_buf(req, 0);
         LOG("[audout] cmd %u out %llx/%llx\n", req->cmd, ob ? (unsigned long long)ob->addr : 0ull,
             ob ? (unsigned long long)ob->size : 0ull);
@@ -1553,7 +1596,7 @@ static void audio_out(Service *s, IpcReq *req, IpcResp *resp) {
         IpcBuf *b = in_buf(req, 0);
         uint64_t tag = IN(uint64_t, 0);
         uint64_t size = b && b->size >= 0x28 ? ((uint64_t *)G2H((uint32_t)b->addr))[3] : 0;
-        if (getenv("MHGU_AUDIO_LOG") && b)
+        if (audio_log() && b)
             LOG("[audout] append tag %llx buf %llx size %llx: %llx %llx %llx %llx %llx\n", (unsigned long long)tag,
                 (unsigned long long)b->addr, (unsigned long long)b->size, ((unsigned long long *)G2H((uint32_t)b->addr))[0],
                 ((unsigned long long *)G2H((uint32_t)b->addr))[1], ((unsigned long long *)G2H((uint32_t)b->addr))[2],
@@ -1579,7 +1622,7 @@ static void audio_out(Service *s, IpcReq *req, IpcResp *resp) {
         if (n > max) n = max;
         if (b && b->size) memset((void *)G2H((uint32_t)b->addr), 0, b->size);  // SDK reads entry 0 even when n == 0
         for (int i = 0; i < n; i++) ((uint64_t *)G2H((uint32_t)b->addr))[i] = a->released[i];
-        if (getenv("MHGU_AUDIO_LOG") && n) LOG("[audout] released %d (first %llx)\n", n, (unsigned long long)a->released[0]);
+        if (audio_log() && n) LOG("[audout] released %d (first %llx)\n", n, (unsigned long long)a->released[0]);
         memmove(a->released, a->released + n, (a->released_n - n) * 8);
         a->released_n -= n;
         pthread_mutex_unlock(&a->lock);

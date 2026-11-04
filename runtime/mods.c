@@ -26,6 +26,12 @@ const char *mods_dir(void) {
         snprintf(s_dir, sizeof s_dir, "%s", e);
         return s_dir;
     }
+    extern const char *g_game_dir;  // (main.c)
+    if (g_game_dir) {
+        static char in_game[1100];
+        snprintf(in_game, sizeof in_game, "%s/mods", g_game_dir);
+        if (is_dir(in_game)) { snprintf(s_dir, sizeof s_dir, "%s", in_game); return s_dir; }
+    }
     const char *candidates[] = {
         "mods", "Mods", "MODS",
         "data/mods", "data/Mods", "data/MODS"

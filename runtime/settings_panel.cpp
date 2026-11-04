@@ -374,6 +374,10 @@ bool equal(const Config &a, const Config &b) {
     SAME(render_h);
     SAME(render_scale);
     SAME(low_end);
+    SAME(shadows);
+    SAME(bloom);
+    SAME(reverb);
+    SAME(adreno_fix);
     SAME(fps);
     SAME(fsr);
     SAME(fsr_upscaler);
@@ -842,6 +846,10 @@ void reset_section() {
         break;
     case 1:
         c.low_end = f.low_end;
+        c.shadows = f.shadows;
+        c.bloom = f.bloom;
+        c.reverb = f.reverb;
+        c.adreno_fix = f.adreno_fix;
         c.fsr = f.fsr;
         c.fsr_upscaler = f.fsr_upscaler;
         c.fsr_quality = f.fsr_quality;
@@ -1143,13 +1151,13 @@ std::vector<Row> main_rows() {
 #endif
         if ((!c.fsr || c.low_end) && !c.render_w) {  // (Auto: the 3D picture in percent of the screen's, RenderScale; the nearest of the presets;
                               // with FSR its quality sets the 3D size)
-            static const int scales[] = {100, 90, 80, 75, 66, 50, 40, 33};
+            static const int scales[] = {100, 90, 80, 75, 66, 50, 40, 33, 25};
             int pick = 0;
             for (int i = 1; i < (int)std::size(scales); i++)
                 if (std::abs(scales[i] - c.render_scale) < std::abs(scales[pick] - c.render_scale))
                     pick = i;
             add_choice(
-                r, "render.scale", "3D resolution", pick, {"100%", "90%", "80%", "75%", "66%", "50%", "40%", "33%"},
+                r, "render.scale", "3D resolution", pick, {"100%", "90%", "80%", "75%", "66%", "50%", "40%", "33%", "25%"},
                 [](int v) { s.draft.render_scale = scales[v]; }, ini("RenderScale"));
             if (scales[pick] != c.render_scale)  // (another value set in the file: shown as it is)
                 r.back().value = std::to_string(c.render_scale) + "%";
@@ -1174,19 +1182,30 @@ std::vector<Row> main_rows() {
         break;
     case 1:
         add_choice(
-            r, "lowend", "Low-end mode", c.low_end ? 1 : 0, {tr("Off"), tr("On")},
-            [](int v) {  // (it brings the resolution and the frame rate along; both can then be changed)
-                s.draft.low_end = v;
+            r, "lowend", "Low-end mode", c.low_end < 0 || c.low_end > 2 ? 0 : c.low_end, {tr("Off"), tr("On"), tr("Toaster")},
+            [](int v) {  // (it brings the resolution, the frame rate and the switches along; all can then be changed)
+                Config &d = s.draft;
+                int was = d.low_end;
+                d.low_end = v;
                 if (v) {
-                    s.draft.render_scale = std::min(s.draft.render_scale, LOW_END_SCALE);
-                    s.draft.fps = std::min(s.draft.fps, LOW_END_FPS);
+                    int scale = v == LOW_END_TOASTER ? TOASTER_SCALE : LOW_END_SCALE;
+                    if (was == LOW_END_TOASTER && d.render_scale == TOASTER_SCALE) d.render_scale = scale;  // (back to On)
+                    d.render_scale = std::min(d.render_scale, scale);
+                    d.fps = std::min(d.fps, LOW_END_FPS);
+                    d.shadows = 0;
+                    d.bloom = 0;
+                    if (v == LOW_END_TOASTER) d.reverb = 0;
+                    else if (was == LOW_END_TOASTER) d.reverb = 1;
                 } else {
-                    if (s.draft.render_scale <= LOW_END_SCALE) s.draft.render_scale = 100;
-                    if (s.draft.fps == LOW_END_FPS) s.draft.fps = 60;
+                    if (d.render_scale <= LOW_END_SCALE) d.render_scale = 100;
+                    if (d.fps == LOW_END_FPS) d.fps = 60;
+                    d.shadows = 1;
+                    d.bloom = 1;
+                    d.reverb = 1;
                 }
             },
             ini("LowEnd"));
-        r.back().help = tr("For weak phones: turns off bloom and depth of field, uses lighter textures and keeps the HUD sharp over a smaller 3D picture. It also sets the 3D resolution and the frame rate, and you can change both.");
+        r.back().help = tr("For weak phones: turns off bloom, depth of field and shadows, uses lighter textures and keeps the HUD sharp over a smaller 3D picture. It also sets the 3D resolution and the frame rate, and you can change all of them. Toaster: everything for speed and the battery before looks: 25%, 30 FPS, no reverb, and a lighter HUD and textures still.");
         number(r, "fps", "Frame rate limit", &c.fps, (int)lo("FPS"), (int)hi("FPS"), 1, ini("FPS"));
         {  // left / right: one frame per second more or less; Confirm: the common ones
             static const int presets[] = {30, 60, 90, 120, 150, 240};
@@ -1255,6 +1274,7 @@ std::vector<Row> main_rows() {
         add_bool(r, "smooth", "Smooth gradients", &c.smooth_gradients, ini("SmoothGradients"));
 #endif
         number(r, "volume", "Volume (%)", &c.volume, (int)lo("Volume"), (int)hi("Volume"), 1, ini("Volume"));
+        add_bool(r, "reverb", "Reverb", &c.reverb, ini("Reverb"));
 #ifndef __ANDROID__  // (a phone: not worth a row)
         add_bool(r, "mutebg", "Mute in background", &c.mute_in_background, ini("MuteInBackground"));
 #endif
