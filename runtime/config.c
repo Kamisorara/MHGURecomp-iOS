@@ -37,6 +37,9 @@
 #ifdef __ANDROID__  // (phones: the screen's own size, full screen; the rest as on PC)
 #define CONFIG_DEFAULT_SIZE 0, 0
 #define CONFIG_DEFAULT_FXAA 0  // (as the new mhgurecomp.ini says: the first run, before that file is read, too)
+#elif MHGU_PHONE
+#define CONFIG_DEFAULT_SIZE 0, 0
+#define CONFIG_DEFAULT_FXAA 1
 #else
 #define CONFIG_DEFAULT_SIZE 1920, 1080
 #define CONFIG_DEFAULT_FXAA 1
@@ -64,7 +67,7 @@ static const char DEFAULT_INI[] =
     "Mode = Borderless\n"
     "\n"
     "; Resolution (WxH)\n"
-#ifdef __ANDROID__
+#if MHGU_PHONE
     "Resolution = Desktop\n"
 #else
     "Resolution = 1920x1080\n"
@@ -1100,6 +1103,13 @@ void config_load(void) {
     config_store_loaded(&g_config);
     const SDL_DisplayMode *dm = SDL_GetDesktopDisplayMode(SDL_GetPrimaryDisplay());
     desktop_w = dm ? dm->w : 1920, desktop_h = dm ? dm->h : 1080;
+#if MHGU_PHONE && !defined(__ANDROID__)
+    // (iOS: SDL gives the screen in points, and the pixels per point apart)
+    if (dm && dm->pixel_density > 0) {
+        desktop_w = (int)(dm->w * dm->pixel_density + 0.5f);
+        desktop_h = (int)(dm->h * dm->pixel_density + 0.5f);
+    }
+#endif
 #if defined(__ANDROID__) || MHGU_PHONE
     // (the game is always landscape, but a phone that is locked or still upright says otherwise: the 3D picture and the
     // HUD would be laid out for that shape, narrow, with black at the sides, until the next start)
@@ -1163,7 +1173,7 @@ void config_load(void) {
     // that shape, smaller, its parts at the top and bottom edges (nvn/vulkan/exec.c). Android: down to 5:4, a console's 4:3
     // screen filled. Wider than 16:9 shows more to the sides, narrower more above and below (camera_fovy, gen.py PATCHES).
     float aspect = g_config.aspect_ratio > 0 ? g_config.aspect_ratio : (float)tw / (float)th;
-#ifdef __ANDROID__
+#if MHGU_PHONE
     const float narrowest = 1.25f;
 #else
     const float narrowest = 1.6f;

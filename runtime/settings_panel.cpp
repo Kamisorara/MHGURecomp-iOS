@@ -1122,10 +1122,12 @@ std::vector<Row> main_rows() {
     };
     switch (s.page) {
     case 0:
-#if !MHGU_PHONE  // (a phone: the window is the screen, at its own resolution; the 3D in percent of it below)
+#if !MHGU_PHONE
         add_choice(
             r, "display.mode", "Window mode", c.display_mode,
             {tr("Windowed"), tr("Fullscreen"), tr("Borderless")}, [](int v) { c.display_mode = v; }, ini("Mode"));
+#endif
+#ifndef __ANDROID__  // (Android: the window is the screen, at its own resolution; the 3D in percent of it below)
         add_choice(
             r, "display.auto", "Screen resolution", !c.width ? 0 : 1, {tr("Desktop"), tr("Custom")},
             [](int v) {
