@@ -109,7 +109,32 @@ void ui_toggle_fullscreen(void) {
     set_fullscreen(!(SDL_GetWindowFlags(window) & SDL_WINDOW_FULLSCREEN));
 }
 
+#if defined(__APPLE__) && defined(TARGET_OS_IPHONE) && TARGET_OS_IPHONE
+// iOS: the app to the background (or gone for good). iOS forbids submitting GPU work from the background, and a
+// submission there loses the device (MoltenVK: "Insufficient Permission ... BackgroundExecutionNotPermitted"): the
+// game stops (runtime/hle/vi.c's pause, its guest clock held) before the app is truly backgrounded, and goes on
+// where it was when it is back. (An event watch: acted on before the call returns.)
+static bool ios_lifecycle(void *ud, SDL_Event *e) {
+    (void)ud;
+    switch (e->type) {
+    case SDL_EVENT_WILL_ENTER_BACKGROUND:
+    case SDL_EVENT_TERMINATING:
+        vi_set_paused(true);
+        break;
+    case SDL_EVENT_DID_ENTER_FOREGROUND:
+        vi_set_paused(false);
+        break;
+    default: break;
+    }
+    return true;
+}
+#endif
+
+void vi_set_paused(bool on);  // (runtime/hle/vi.c: the game's pause in the background)
 int ui_run(void) {
+#if defined(__APPLE__) && defined(TARGET_OS_IPHONE) && TARGET_OS_IPHONE
+    SDL_AddEventWatch(ios_lifecycle, NULL);
+#endif
     for (;;) {
         SDL_Event e;
         if (SDL_WaitEventTimeout(&e, 4)) {

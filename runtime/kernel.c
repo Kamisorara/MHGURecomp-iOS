@@ -83,8 +83,9 @@ void kernel_signal(KObject *o) {
 }
 
 // ------------------------------------------------------------------ time
-uint64_t rt_ticks(void) {  // 19.2 MHz system tick
-    return (uint64_t)((unsigned __int128)plat_now_ns() * 192 / 10000);
+uint64_t rt_ticks(void) {  // 19.2 MHz system tick (the guest's clock; stands still while paused, hle/vi.c)
+    extern uint64_t vi_guest_ns(void);
+    return (uint64_t)((unsigned __int128)vi_guest_ns() * 192 / 10000);
 }
 
 static void deadline(struct timespec *ts, int64_t timeout_ns) {

@@ -40,6 +40,7 @@ static void ImGui_ImplVulkan_UpdateTexture(ImTextureData *) {}
 #include "overlay.h"
 #include "romfs.h"
 
+void vi_pause_game(void);  // (runtime/hle/vi.c: the game waits here while the app is in the background)
 #define LOG(...) (fprintf(stderr, __VA_ARGS__), fflush(stderr))
 
 extern "C" {
@@ -395,6 +396,9 @@ static void snap_clear(void) {
 }
 
 void overlay_frame(void *cpu) {
+    // (once a frame on the game's update thread: the game stops here while the app is in the background, its clock
+    // held, so no GPU work is submitted there - iOS forbids that, and a submission there loses the device)
+    vi_pause_game();
     if (!g_ready) return;
     bool open = g_open, free_render = forge_plugins_have(FORGE_IMGUI_FREE_RENDER);
     ImGuiIO &io = ImGui::GetIO();

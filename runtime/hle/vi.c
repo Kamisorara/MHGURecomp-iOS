@@ -39,13 +39,101 @@ void vi_apply_framerate(void) {  // (also called per presented frame: runtime/nv
     if (cur == 30.0f && want != 30.0f) STF(obj + 0x3c, want);
 }
 
+// ---- the app in the background (runtime/ui.c's lifecycle watch)
+// The game stops: its update thread waits at its next frame (vi_pause_game, from runtime/overlay.cpp's frame), and
+// once it does - or a moment after the app left, if it never gets there (a long load) - the vsync thread waits too
+// (vi_pause_wait). While the update thread waits the guest's clock (rt_ticks) stands still: the engine's limiter
+// takes its frame step from that clock, so the first frame back is an ordinary frame's step, not the whole pause
+// (capped at 16 frames by the engine: a quarter-second jump). iOS itself gives the reason: it is an error to submit
+// GPU work from the background, and a submission there loses the device (MoltenVK's device lost).
+#define PAUSE_GRACE_NS 500000000ull
+static pthread_mutex_t pause_lock = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t pause_cond = PTHREAD_COND_INITIALIZER;
+static volatile int pause_wanted, pause_parked;  // the app is in the background; the update thread waits
+static volatile uint64_t pause_since;            // when it left (plat_now_ns)
+// The guest's clock: plat_now_ns less the time it stood still (clock_held), or clock_frozen while it stands
+// (0: it runs). clock_gen is odd while they change (only the update thread changes them, under pause_lock), so a
+// reader never mixes a value from before the change with one from after it.
+static volatile uint32_t clock_gen;
+static volatile uint64_t clock_frozen, clock_held;
+
+uint64_t vi_guest_ns(void) {  // (runtime/kernel.c rt_ticks)
+    for (;;) {
+        uint32_t g = __atomic_load_n(&clock_gen, __ATOMIC_ACQUIRE);
+        uint64_t f = __atomic_load_n(&clock_frozen, __ATOMIC_RELAXED), held = __atomic_load_n(&clock_held, __ATOMIC_RELAXED);
+        uint64_t t = f ? f : plat_now_ns() - held;
+        __atomic_thread_fence(__ATOMIC_ACQUIRE);
+        if (!(g & 1) && __atomic_load_n(&clock_gen, __ATOMIC_RELAXED) == g) return t;
+    }
+}
+
+static void clock_set(uint64_t frozen, uint64_t held) {  // (under pause_lock)
+    uint32_t g = __atomic_load_n(&clock_gen, __ATOMIC_RELAXED);
+    __atomic_store_n(&clock_gen, g + 1, __ATOMIC_RELAXED);
+    __atomic_thread_fence(__ATOMIC_RELEASE);
+    __atomic_store_n(&clock_frozen, frozen, __ATOMIC_RELAXED);
+    __atomic_store_n(&clock_held, held, __ATOMIC_RELAXED);
+    __atomic_store_n(&clock_gen, g + 2, __ATOMIC_RELEASE);
+}
+
+// (host main thread: runtime/ui.c's lifecycle watch) the app went to the background, or came back
+void vi_set_paused(bool on) {
+    pthread_mutex_lock(&pause_lock);
+    if (on && !pause_wanted) {
+        __atomic_store_n(&pause_since, plat_now_ns(), __ATOMIC_RELAXED);
+        LOG("[app] paused in the background\n");
+    } else if (!on && pause_wanted) {
+        LOG("[app] resumed\n");
+    }
+    __atomic_store_n(&pause_wanted, on ? 1 : 0, __ATOMIC_RELEASE);
+    pthread_cond_broadcast(&pause_cond);
+    pthread_mutex_unlock(&pause_lock);
+}
+
+// Should the presenting / vsync threads stop now? (cheap while the app is in front: one load)
+bool vi_paused(void) {
+    if (!__atomic_load_n(&pause_wanted, __ATOMIC_ACQUIRE)) return false;
+    return __atomic_load_n(&pause_parked, __ATOMIC_ACQUIRE) ||
+           plat_now_ns() - __atomic_load_n(&pause_since, __ATOMIC_RELAXED) >= PAUSE_GRACE_NS;
+}
+
+// Those threads: wait here while they should stop, until the app is back. (Called holding no lock another thread needs.)
+void vi_pause_wait(void) {
+    if (!vi_paused()) return;
+    pthread_mutex_lock(&pause_lock);
+    while (pause_wanted) pthread_cond_wait(&pause_cond, &pause_lock);
+    pthread_mutex_unlock(&pause_lock);
+}
+
+// The game's update thread, once a frame (runtime/overlay.cpp overlay_frame): wait here while the app is in the
+// background, the guest's clock held meanwhile.
+void vi_pause_game(void) {
+    if (!__atomic_load_n(&pause_wanted, __ATOMIC_ACQUIRE)) return;
+    pthread_mutex_lock(&pause_lock);
+    if (!pause_wanted) { pthread_mutex_unlock(&pause_lock); return; }
+    uint64_t t0 = plat_now_ns(), frozen = t0 - __atomic_load_n(&clock_held, __ATOMIC_RELAXED);
+    if (!frozen) frozen = 1;  // (0 means running)
+    clock_set(frozen, __atomic_load_n(&clock_held, __ATOMIC_RELAXED));
+    __atomic_store_n(&pause_parked, 1, __ATOMIC_RELEASE);
+    while (pause_wanted) pthread_cond_wait(&pause_cond, &pause_lock);
+    uint64_t t1 = plat_now_ns();
+    clock_set(0, t1 - frozen);  // (the clock goes on from where it stood)
+    __atomic_store_n(&pause_parked, 0, __ATOMIC_RELEASE);
+    pthread_mutex_unlock(&pause_lock);
+    LOG("[app] game clock held %.1f s\n", (t1 - t0) / 1e9);
+}
+
 // The display's vsync event: 60 Hz, or the frame rate target when that is higher (the game waits for it per frame).
 static void *vsync_thread(void *arg) {
     (void)arg;
-    float fr = framerate();
-    const uint64_t period = (uint64_t)(1e9 / (fr > 60.0f ? fr : 60.0f));
     uint64_t next = plat_now_ns();
     for (;;) {
+        if (vi_paused()) {  // (the app in the background: no frames to pace; then on from now, no burst)
+            vi_pause_wait();
+            next = plat_now_ns();
+        }
+        float fr = framerate();
+        const uint64_t period = (uint64_t)(1e9 / (fr > 60.0f ? fr : 60.0f));
         next += period;
         plat_sleep_until_ns(next);
         uint64_t now = plat_now_ns();
