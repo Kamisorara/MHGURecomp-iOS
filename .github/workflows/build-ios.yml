@@ -8,7 +8,7 @@ on:
 jobs:
   build:
     name: Build MHGURecomp for iOS / iPadOS
-    runs-on: macos-14
+    runs-on: macos-15
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -20,7 +20,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: deps
-          key: ios-deps-macos-14-deps-v2
+          key: ios-deps-macos-15-deps-v3
 
       - name: Setup iOS Dependencies (MoltenVK, SDL3, Shaderc)
         if: steps.cache-deps.outputs.cache-hit != 'true'
@@ -76,7 +76,7 @@ jobs:
       - name: Build MHGURecomp iOS Binary
         run: |
           NCPU=$(sysctl -n hw.ncpu)
-          echo "Building on macos-14 with $NCPU cores..."
+          echo "Building on macos-15 with $NCPU cores..."
           make -j$NCPU DEPS=deps PLATFORM=darwin STATIC_GAMELIB=1 FFMPEG=none GENARCH=""
           file build/MHGURecomp
 
