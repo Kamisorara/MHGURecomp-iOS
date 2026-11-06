@@ -40,7 +40,7 @@ static void ImGui_ImplVulkan_UpdateTexture(ImTextureData *) {}
 #include "overlay.h"
 #include "romfs.h"
 
-void vi_pause_game(void);  // (runtime/hle/vi.c: the game waits here while the app is in the background)
+extern "C" void vi_pause_game(void);  // (runtime/hle/vi.c: the game waits here while the app is in the background)
 #define LOG(...) (fprintf(stderr, __VA_ARGS__), fflush(stderr))
 
 extern "C" {
